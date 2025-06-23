@@ -63,7 +63,7 @@ def aggregate_matrices(
     # --- Dispatch to the correct aggregation method ---
 
     # Initialize the aggregated matrix using a helper from the matrix_factory module
-    from .matrix_factory import create_comparison_matrix
+    from .matrix_builder import create_comparison_matrix
     aggregated_matrix = create_comparison_matrix(n, number_type)
 
     for i in range(n):
