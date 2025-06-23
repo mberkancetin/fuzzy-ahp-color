@@ -28,8 +28,11 @@ class Node(Generic[Number]):
         self.global_weight: Optional[Number] = None
 
     def __repr__(self) -> str:
-        return (f"Node(id='{self.id}', local_weight={self.local_weight:.3f}, "
-                f"global_weight={self.global_weight:.3f}, children={len(self.children)})")
+        local_w_str = f"{self.local_weight.defuzzify():.3f}" if self.local_weight is not None else "N/A"
+        global_w_str = f"{self.global_weight.defuzzify():.4f}" if self.global_weight is not None else "N/A"
+        
+        return (f"Node(id='{self.id}', local_weight={local_w_str}, "
+                f"global_weight={global_w_str}, children={len(self.children)})")
 
     def add_child(self, child_node: Node[Number]):
         """
