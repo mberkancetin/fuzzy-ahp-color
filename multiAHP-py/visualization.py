@@ -1,0 +1,460 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING, List, Dict, Optional, Tuple, Union
+import uuid
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.patches import Polygon
+from matplotlib.colors import LinearSegmentedColormap
+import seaborn as sns
+import networkx as nx
+
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon
+    import networkx as nx
+    _PLOT_AVAILABLE = True
+except ImportError:
+    _PLOT_AVAILABLE = False
+
+if TYPE_CHECKING:
+    from .model import Hierarchy, Node
+    from .types import NumericType, Number, TFN, Crisp
+
+
+# ==============================================================================
+# 1. HTML HIERARCHY DIAGRAM
+# ==============================================================================
+
+def _render_expandable_node(node: 'Node', is_alt: bool = False, alt_obj=None) -> str:
+    """
+    Renders a single, generic, expandable node box for any element in the hierarchy.
+    """
+    body_id = 'node-body-' + str(uuid.uuid4())[:8]
+
+    # --- Prepare details for the expandable body ---
+    details_html = "<ul>"
+    if is_alt: # Alternative Node
+        score_str = f"{alt_obj.overall_score.defuzzify():.4f}" if alt_obj.overall_score else 'N/A'
+        details_html += f"<li><b>Final Score:</b> {score_str}</li>"
+        if alt_obj.performance_scores:
+            details_html += "<li><b>Performance Scores:</b><ul>"
+            for leaf_id, score in alt_obj.performance_scores.items():
+                details_html += f"<li>{leaf_id}: {score.defuzzify():.3f}</li>"
+            details_html += "</ul></li>"
+    else: # Hierarchy Node (Goal, Criterion, Sub-criterion)
+        local_w_str = f"{node.local_weight.defuzzify():.3f}" if node.local_weight else 'N/A'
+        global_w_str = f"{node.global_weight.defuzzify():.4f}" if node.global_weight else 'N/A'
+        parent_id_str = node.parent.id if node.parent else 'None'
+        details_html += f"<li><b>Description:</b> {node.description or 'N/A'}</li>"
+        details_html += f"<li><b>Parent:</b> {parent_id_str}</li>"
+        details_html += f"<li><b>Local Weight:</b> {local_w_str}</li>"
+        details_html += f"<li><b>Global Weight:</b> {global_w_str}</li>"
+    details_html += "</ul>"
+
+    header_text = alt_obj.name if is_alt else node.id
+
+    return f"""
+    <div class="ahp-node" onclick="toggleAHPNode('{body_id}', event)">
+        <div class="ahp-node-header">{header_text}</div>
+        <div class="ahp-node-body" id="{body_id}">
+            {details_html}
+        </div>
+    </div>
+    """
+
+def _render_criterion_tree(node: 'Node') -> str:
+    """Renders the tree for a single criterion and its children."""
+    if node.is_leaf:
+        return _render_expandable_node(node)
+
+    parent_html = f'<div class="tree-parent">{_render_expandable_node(node)}</div>'
+    children_html = "".join([_render_expandable_node(child) for child in node.children])
+    children_container_html = f'<div class="tree-children">{children_html}</div>'
+
+    return f'<div class="criterion-tree-block">{parent_html}{children_container_html}</div>'
+
+def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None):
+    """
+    Generates and displays/saves a static, tree-diagram-style HTML representation
+    of the AHP hierarchy, matching the final photoshopped layout.
+    """
+    from IPython.display import display, HTML
+
+    # Ensure weights are calculated
+    if not all(c.global_weight is not None for c in model.root.children):
+        try: model.calculate_weights()
+        except Exception as e: print(f"Warning: Could not auto-calculate weights for display. Run model.calculate_weights() first. Error: {e}")
+
+    # --- CSS AND JAVASCRIPT ---
+    css_js = """
+    <style>
+        .ahp-viz-container {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            /* Add overflow-x here to contain the entire visualization */
+            overflow-x: auto;
+            padding-bottom: 20px; /* Add some padding for the scrollbar */
+        }
+        .ahp-stage {
+            border: 1px solid #e0e0e0; border-radius: 8px; padding: 1.5em;
+            margin: 20px 0; background-color: #f7f9fc;
+
+            /* --- FIX IS HERE --- */
+            /* This makes the stage container size itself to its content */
+            display: inline-block;
+            min-width: 100%; /* Ensures it's at least as wide as the page */
+            box-sizing: border-box; /* Includes padding and border in the width calculation */
+        }
+        .ahp-stage-title {
+            text-align: center; font-weight: 600; font-size: 1.1em;
+            color: #5f6368; margin-bottom: 25px; text-transform: uppercase; letter-spacing: 1px;
+        }
+        .ahp-connector { height: 30px; display: flex; justify-content: center; align-items: center; }
+        .ahp-connector::after { content: ''; display: block; width: 2px; height: 100%; background-color: #bdc1c6; }
+
+        /* Node Box Styling */
+        .ahp-node {
+            background: #fff; border: 1px solid #dadce0; border-radius: 6px;
+            display: inline-block; min-width: 120px; text-align: center;
+            box-shadow: 0 1px 2px rgba(60,64,67,0.1); cursor: pointer;
+        }
+        .ahp-node-header { padding: 8px 12px; font-weight: bold; color: #202124; }
+        .ahp-node-body {
+            font-size: 0.85em; color: #333; max-height: 0;
+            overflow: hidden; transition: max-height 0.4s ease-in-out; text-align: left;
+            border-top: 1px solid #f1f3f4;
+        }
+        .ahp-node-body ul { list-style-type: none; padding: 10px; margin: 0; }
+        .ahp-node-body ul ul { padding-left: 15px; padding-top: 5px; }
+
+        /* Criteria Stage Layout */
+        .criteria-container {
+            display: flex;
+            justify-content: flex-start; /* Align to the start instead of space-around */
+            align-items: flex-start;
+            gap: 40px; /* More space between criteria trees */
+            padding: 10px; /* Add some internal padding */
+        }
+        .criterion-tree-block { display: flex; flex-direction: column; align-items: center; }
+
+        /* Tree Connecting Lines */
+        .tree-parent { position: relative; padding-bottom: 20px; }
+        .tree-parent::after {
+            content: ''; position: absolute; bottom: 0; left: 50%;
+            transform: translateX(-50%); width: 2px; height: 20px; background-color: #bdc1c6;
+        }
+        .tree-children {
+            display: flex; justify-content: center; position: relative; padding-top: 20px;
+            gap: 15px; /* Space between sibling sub-criteria */
+        }
+        .tree-children::before {
+            content: ''; position: absolute; top: 0; left: 10%; right: 10%;
+            height: 2px; background-color: #bdc1c6;
+        }
+        .tree-children .ahp-node { position: relative; }
+        .tree-children .ahp-node::before {
+            content: ''; position: absolute; top: -20px; left: 50%;
+            transform: translateX(-50%); width: 2px; height: 20px; background-color: #bdc1c6;
+        }
+
+        /* Alternatives Stage Layout */
+        .ahp-alternatives-container { display: flex; flex-direction: column; align-items: center; gap: 15px; }
+    </style>
+    <script>
+        function toggleAHPNode(elementId, event) {
+            event.stopPropagation();
+            const body = document.getElementById(elementId);
+            if (body.style.maxHeight && body.style.maxHeight !== '0px') {
+                body.style.maxHeight = '0px';
+            } else {
+                body.style.maxHeight = body.scrollHeight + 'px';
+            }
+        }
+    </script>
+    """
+
+    # --- HTML GENERATION ---
+
+    # 1. Goal Stage
+    goal_html = f"""
+    <div class="ahp-stage">
+        <div class="ahp-stage-title">Goal</div>
+        <div style="display: flex; justify-content: center;">
+            {_render_expandable_node(model.root)}
+        </div>
+    </div>
+    """
+
+    # 2. Criteria Stage (Horizontal layout of vertical trees)
+    criteria_trees_html = "".join([_render_criterion_tree(crit_node) for crit_node in model.root.children])
+    criteria_html = f"""
+    <div class="ahp-stage">
+        <div class="ahp-stage-title">Criteria & Sub-Criteria</div>
+        <div class="criteria-container">
+            {criteria_trees_html}
+        </div>
+    </div>
+    """
+
+    # 3. Alternatives Stage
+    alternatives_html = ""
+    if model.alternatives:
+        # Sort alternatives by score before displaying
+        ranked_alts = sorted(model.alternatives, key=lambda alt: alt.overall_score.defuzzify() if alt.overall_score else -1, reverse=True)
+        alt_html_parts = [_render_expandable_node(None, is_alt=True, alt_obj=alt) for alt in ranked_alts]
+
+        alternatives_html = f"""
+        <div class="ahp-stage">
+            <div class="ahp-stage-title">Alternatives</div>
+            <div class="ahp-alternatives-container">
+                {''.join(alt_html_parts)}
+            </div>
+        </div>
+        """
+
+    # Assemble the final document
+    connector = '<div class="ahp-connector"></div>'
+    full_html_body = f'{goal_html}{connector}{criteria_html}{connector}{alternatives_html}' if model.alternatives else f'{goal_html}{connector}{criteria_html}'
+    full_document = f"""
+    <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+    <title>AHP Diagram</title>{css_js}</head>
+    <body><div class="ahp-viz-container">{full_html_body}</div></body></html>
+    """
+
+    # Final step: Save to file or display
+    if filename:
+        try:
+            with open(filename, 'w', encoding='utf-8') as f: f.write(full_document)
+            print(f"✅ Hierarchy visualization saved to: {filename}")
+        except Exception as e: print(f"❌ Error saving file: {e}")
+    else:
+        try:
+            from IPython.display import display, HTML
+            display(HTML(full_document))
+        except ImportError:
+            print("Could not display inline. Provide a `filename` to save as an HTML file.")
+
+def format_model_summary(model: 'Hierarchy', alternative_name: str) -> str:
+    """
+    Generates a structured string summary of the entire evaluation model
+    for a single alternative, similar to the presentation slide.
+
+    Args:
+        model: The fully calculated Hierarchy instance.
+        alternative_name: The name of the alternative to display scores for.
+
+    Returns:
+        A formatted string representing the model summary.
+    """
+    alt = next((a for a in model.alternatives if a.name == alternative_name), None)
+    if alt is None:
+        return f"Error: Alternative '{alternative_name}' not found in the model."
+    if alt.overall_score is None:
+        return f"Error: Scores for '{alternative_name}' have not been calculated yet."
+
+    lines = []
+    header = f" HIERARCHICAL EVALUATION SUMMARY for: {alt.name} "
+    lines.append("=" * len(header))
+    lines.append(header)
+    lines.append("=" * len(header))
+    lines.append(f"\nFINAL OVERALL SCORE: {alt.overall_score.defuzzify():.4f}\n")
+
+    # Iterate through the main criteria
+    for crit_node in model.root.children:
+        crit_weight = crit_node.local_weight.defuzzify()
+        crit_score = alt.node_scores[crit_node.id].defuzzify()
+        crit_contribution = crit_weight * crit_score
+
+        lines.append(f"--- Criterion: {crit_node.id} ({crit_node.description}) ---")
+        lines.append(f"  - Global Weight: {crit_node.global_weight.defuzzify():.4f}")
+        lines.append(f"  - Aggregated Performance Score for this Criterion: {crit_score:.4f}")
+        lines.append(f"  - Contribution to Final Score: {crit_contribution:.4f}\n")
+
+        # Iterate through sub-criteria
+        if not crit_node.is_leaf:
+            lines.append("    Sub-criteria Breakdown:")
+            for sub_crit_node in crit_node.children:
+                sub_crit_local_weight = sub_crit_node.local_weight.defuzzify()
+                sub_crit_global_weight = sub_crit_node.global_weight.defuzzify()
+                perf_score = alt.performance_scores[sub_crit_node.id].defuzzify()
+
+                lines.append(f"      - {sub_crit_node.id}:")
+                lines.append(f"          Local Weight (within {crit_node.id}): {sub_crit_local_weight:.3f}")
+                lines.append(f"          Global Weight: {sub_crit_global_weight:.4f}")
+                lines.append(f"          Performance Score: {perf_score:.4f}")
+        lines.append("-" * 40)
+
+    return "\n".join(lines)
+
+
+# ==============================================================================
+# 2. MATPLOTLIB PLOTTING FUNCTIONS
+# ==============================================================================
+
+def _check_plotting_availability():
+    """Helper function to raise an error if plotting libraries are not installed."""
+    if not _PLOT_AVAILABLE:
+        raise ImportError("Plotting functionality requires matplotlib and networkx. "
+                          "Please install them using: pip install matplotlib networkx")
+
+def plot_weights(model: Hierarchy, parent_node_id: str, figsize=(10, 6)) -> 'plt.Figure':
+    """
+    Plots the local weights of the children of a given parent node.
+
+    Args:
+        model: The Hierarchy (AHPModel) instance.
+        parent_node_id: The ID of the parent node whose children's weights to plot.
+        figsize: The size of the figure.
+
+    Returns:
+        The matplotlib Figure object.
+    """
+    _check_plotting_availability()
+
+    parent_node = model._find_node(parent_node_id)
+    if not parent_node or parent_node.is_leaf:
+        raise ValueError(f"Node '{parent_node_id}' is not a valid parent or was not found.")
+
+    children = parent_node.children
+    labels = [child.id for child in children]
+    weights = [child.local_weight for child in children]
+
+    crisp_weights = [w.defuzzify() for w in weights]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    bars = ax.bar(labels, crisp_weights, color=plt.cm.viridis(np.linspace(0, 1, len(labels))))
+
+    ax.set_ylabel('Weight (Defuzzified)')
+    ax.set_title(f'Local Weight Distribution for Children of "{parent_node_id}"')
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+
+    # Add value labels on top of bars
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2.0, yval, f'{yval:.3f}', va='bottom', ha='center')
+
+    fig.tight_layout()
+    return fig
+
+def plot_final_rankings(model: Hierarchy, figsize=(10, 6)) -> 'plt.Figure':
+    """
+    Plots the final rankings of the alternatives with their crisp scores.
+
+    Args:
+        model: The fully calculated Hierarchy (AHPModel) instance.
+        figsize: The size of the figure.
+
+    Returns:
+        The matplotlib Figure object.
+    """
+    _check_plotting_availability()
+
+    rankings = model.get_rankings() # This already returns defuzzified, sorted results
+
+    alt_names = [r[0] for r in rankings]
+    scores = [r[1] for r in rankings]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    bars = ax.barh(alt_names, scores, color=plt.cm.plasma(np.linspace(0.4, 0.9, len(scores))))
+
+    ax.set_xlabel('Final Score')
+    ax.set_ylabel('Alternative')
+    ax.set_title('Final Alternative Rankings')
+    ax.grid(axis='x', linestyle='--', alpha=0.6)
+    ax.invert_yaxis() # Display the top-ranked alternative at the top
+
+    # Add value labels to the side of the bars
+    for i, bar in enumerate(bars):
+        ax.text(bar.get_width() + 0.005, bar.get_y() + bar.get_height()/2,
+                f'{scores[i]:.4f}', va='center')
+
+    fig.tight_layout()
+    return fig
+
+def plot_sensitivity_analysis(
+    model: Hierarchy,  # <-- It accepts the model object
+    parent_node_id: str,
+    criterion_to_vary_id: str,
+    alternative_name: str,
+    figsize=(12, 7)
+) -> 'plt.Figure':
+    """
+    Performs a simple sensitivity analysis by varying the local weight of one criterion
+    and observing the effect on a single alternative's final score.
+
+    Args:
+        model: The calculated Hierarchy (AHPModel) instance.
+        parent_node_id: The parent of the criterion being varied.
+        criterion_to_vary_id: The ID of the criterion whose weight will be varied.
+        alternative_name: The name of the alternative to track.
+        figsize: The size of the figure.
+
+    Returns:
+        The matplotlib Figure object.
+    """
+    _check_plotting_availability()
+
+    parent_node = model._find_node(parent_node_id)
+    if not parent_node:
+        raise ValueError(f"Parent node '{parent_node_id}' not found.")
+
+    criterion_to_vary = model._find_node(criterion_to_vary_id)
+    if not criterion_to_vary or criterion_to_vary.parent != parent_node:
+        raise ValueError(f"'{criterion_to_vary_id}' is not a direct child of '{parent_node_id}'.")
+
+    alt_to_track = next((a for a in model.alternatives if a.name == alternative_name), None)
+    if not alt_to_track:
+        raise ValueError(f"Alternative '{alternative_name}' not found.")
+
+    # --- IMPORTANT: Store original state ---
+    # We need to save the local weights of all siblings to restore them later.
+    original_sibling_weights = {sib.id: sib.local_weight for sib in parent_node.children}
+
+    # Also get the original defuzzified weight for plotting
+    original_crisp_weight = criterion_to_vary.local_weight.defuzzify()
+
+    weight_range = np.linspace(0.01, 0.99, 50)
+    final_scores = []
+
+    for new_weight in weight_range:
+        # Temporarily set the new weight for the criterion being varied
+        criterion_to_vary.local_weight = model.number_type.from_crisp(new_weight)
+
+        # Redistribute the remaining weight among the OTHER siblings proportionally
+        siblings_to_adjust = [c for c in parent_node.children if c.id != criterion_to_vary_id]
+        current_siblings_weight_sum = sum(original_sibling_weights[s.id].defuzzify() for s in siblings_to_adjust)
+        remaining_weight = 1.0 - new_weight
+
+        if current_siblings_weight_sum > 0:
+            for sibling in siblings_to_adjust:
+                proportion = original_sibling_weights[sibling.id].defuzzify() / current_siblings_weight_sum
+                sibling.local_weight = model.number_type.from_crisp(remaining_weight * proportion)
+
+        # Recalculate global weights and scores with the temporary weights
+        model.calculate_weights()
+        model.calculate_alternative_scores()
+
+        # Find the target alternative in the newly calculated results
+        target_alt_new = next(a for a in model.alternatives if a.name == alternative_name)
+        final_scores.append(target_alt_new.overall_score.defuzzify())
+
+    # --- RESTORE THE ORIGINAL WEIGHTS to avoid side effects ---
+    for child in parent_node.children:
+        child.local_weight = original_sibling_weights[child.id]
+    # Fully recalculate everything to restore the model to its original state
+    model.calculate_weights()
+    model.calculate_alternative_scores()
+
+    # --- Create the plot ---
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(weight_range, final_scores, marker='.', linestyle='-', label=f"Score for {alternative_name}")
+    ax.axvline(x=original_crisp_weight, color='r', linestyle='--', label=f'Original Weight ({original_crisp_weight:.3f})')
+
+    ax.set_xlabel(f"Local Weight of '{criterion_to_vary_id}'")
+    ax.set_ylabel(f"Final Score for '{alternative_name}'")
+    ax.set_title(f"Sensitivity Analysis for Criterion '{criterion_to_vary_id}'")
+    ax.legend()
+    ax.grid(True, alpha=0.5)
+
+    fig.tight_layout()
+    return fig
