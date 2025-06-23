@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 if TYPE_CHECKING:
-    from .types import NumericType, Number, TFN, Crisp
+    from multiAHPy.types import NumericType, Number, TFN, Crisp
 
 # ==============================================================================
 # 1. FUZZY SCALE CONVERSION
@@ -167,4 +167,3 @@ def create_matrix_from_judgments(
         matrix[i, j] = FuzzyScale.get_fuzzy_number(value, number_type, fuzziness)
 
     return complete_matrix_from_upper_triangle(matrix)
-

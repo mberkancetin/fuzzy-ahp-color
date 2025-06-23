@@ -18,8 +18,8 @@ except ImportError:
     _PLOT_AVAILABLE = False
 
 if TYPE_CHECKING:
-    from .model import Hierarchy, Node
-    from .types import NumericType, Number, TFN, Crisp
+    from multiAHPy.model import Hierarchy, Node
+    from multiAHPy.types import NumericType, Number, TFN, Crisp
 
 
 # ==============================================================================

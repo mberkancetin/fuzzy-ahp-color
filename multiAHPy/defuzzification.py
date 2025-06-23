@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
+    from multiAHPy.types import TFN, TrFN, Crisp, GFN, NumericType, Number
 
 
 def centroid_method(fuzzy_number: TFN) -> float:
@@ -219,4 +219,3 @@ class Defuzzification:
             return fuzzy_number.defuzzify(method, **kwargs)
         else:
             raise TypeError(f"Unsupported type for defuzzification: {type(fuzzy_number)}")
-

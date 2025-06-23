@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 if TYPE_CHECKING:
-    from .types import NumericType, Number, TFN, Crisp
+    from multiAHPy.types import NumericType, Number, TFN, Crisp
 
 # ==============================================================================
 # 1. GENERIC & CLASSIC AHP ALGORITHMS

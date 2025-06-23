@@ -3,8 +3,8 @@ from typing import List, Dict, Any, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from .model import Hierarchy, Node
-    from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
+    from multiAHPy.model import Hierarchy, Node
+    from multiAHPy.types import TFN, TrFN, Crisp, GFN, NumericType, Number
 
 class Validation:
     """

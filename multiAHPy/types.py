@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 from typing import Protocol, TypeVar, Union
 from functools import total_ordering
-from .defuzzification import Defuzzification
+from multiAHPy.defuzzification import Defuzzification
 
 # ==============================================================================
 # 1. THE PROTOCOL BLUEPRINT

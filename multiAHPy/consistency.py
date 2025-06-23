@@ -3,8 +3,8 @@ from typing import Dict, List, Any, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from .model import Hierarchy, Node
-    from .types import NumericType, Number, TFN
+    from multiAHPy.model import Hierarchy, Node
+    from multiAHPy.types import NumericType, Number, TFN
 
 class Consistency:
     """

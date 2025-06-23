@@ -3,8 +3,8 @@ from typing import List, Type, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from .types import NumericType, Number, TFN, TrFN
-    from .matrix_builder import create_comparison_matrix
+    from multiAHPy.types import NumericType, Number, TFN, TrFN
+    from multiAHPy.matrix_builder import create_comparison_matrix
 
 def aggregate_matrices(
     matrices: List[np.ndarray],
