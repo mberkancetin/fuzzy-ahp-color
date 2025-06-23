@@ -49,7 +49,7 @@ This is the heart of the library's flexibility. Any number class (like `Crisp`, 
 - **`aggregation.py`**: Functions to combine judgments from multiple participants.
 - **`model.py`**: Core classes (`Hierarchy`, `Node`, `Alternative`).
 - **`types.py`**: Defines all number types (`Crisp`, `TFN`, etc.) and the `NumericType` protocol.
-- **`defuzzification.py`**: Handles defuzzification methods ("centroid", "graded_mean", "alpha_cut", etc.) for number types.
+- **`defuzzification.py`**: Handles defuzzification methods (`centroid`, `graded_mean`, `alpha_cut`, etc.) for number types.
 - **`weight_derivation.py`**: Algorithms for calculating priority weights.
 - **`consistency.py`**: Functions to calculate and analyze the Consistency Ratio (CR).
 - **`validation.py`**: Tools to validate the structure and data of the model.
