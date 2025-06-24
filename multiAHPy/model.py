@@ -301,17 +301,24 @@ class Hierarchy(Generic[Number]):
         return generate_full_report(self, derivation_method=d_method,
                                     consistency_method=c_method, filename=filename)
 
-    def export_report(self, filename: str, **kwargs):
+    def export_report(self, filename: str, output_format: str = 'excel', **kwargs):
         """
-        Exports a detailed analysis of all matrices to a structured file.
+        Exports a detailed analysis of all matrices to a specified format.
 
         Args:
-            filename: Path to save the report. Use '.xlsx' for a multi-sheet
-                      Excel file or '.csv' for multiple CSV files.
-            **kwargs: derivation_method, consistency_method
+            filename: For 'excel'/'csv', the path/base name.
+                      For 'gsheet', the desired name of the new spreadsheet.
+            output_format (str, optional): 'excel', 'csv', or 'gsheet'. Defaults to 'excel'.
+            **kwargs: Can include 'derivation_method' and 'consistency_method'.
         """
-        from .visualization import export_full_report
+        from .reporting import export_full_report
         d_method = kwargs.get('derivation_method', 'geometric_mean')
         c_method = kwargs.get('consistency_method', 'centroid')
-
-        export_full_report(self, filename, derivation_method=d_method, consistency_method=c_method)
+        
+        export_full_report(
+            model=self,
+            filename=filename,
+            output_format=output_format,
+            derivation_method=d_method,
+            consistency_method=c_method
+        )
