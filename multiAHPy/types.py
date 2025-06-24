@@ -1,6 +1,6 @@
 from __future__ import annotations
 import numpy as np
-from typing import Protocol, TypeVar, Union
+from typing import Protocol, TypeVar, Union, Any
 from functools import total_ordering
 from multiAHPy.defuzzification import Defuzzification
 
@@ -122,6 +122,17 @@ class Crisp:
 
     def power(self, exponent: float) -> Crisp:
         return self.__pow__(exponent)
+
+    def get_crisp_value(item: Any, method: str = 'centroid') -> float:
+        """Safely gets the float value from a NumericType or a primitive number."""
+        if hasattr(item, 'value'): # It's our Crisp class
+            return item.value
+        elif hasattr(item, 'defuzzify'): # It's a TFN, TrFN, etc.
+            return item.defuzzify(method=method)
+        elif isinstance(item, (int, float)): # It's already a primitive number
+            return float(item)
+        else:
+            raise TypeError(f"Cannot extract a crisp value from type {type(item)}")
 
 
 @total_ordering
