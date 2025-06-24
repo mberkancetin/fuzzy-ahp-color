@@ -381,8 +381,16 @@ class TrFN:
 @total_ordering
 class GFN:
     """
-    Implementation of a Gaussian Fuzzy Number, defined by a mean (m) and a
+    Implementation of a Gaussian Fuzzy Number (m, sigma), defined by a mean (m) and a
     standard deviation (sigma). Fully implements the NumericType protocol.
+
+    .. note::
+        **Academic Note:** The arithmetic operations (`+`, `*`, etc.) for GFNs
+        implemented here are common and practical approximations. True operations
+        on Gaussian fuzzy numbers would result in non-Gaussian fuzzy numbers,
+        requiring more complex representations. These approximations are widely
+        used to maintain the Gaussian form throughout calculations but may not
+        be perfectly accurate for large sigma values.
     """
     def __init__(self, m: float, sigma: float):
         if sigma < 0:

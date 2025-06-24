@@ -12,7 +12,13 @@ if TYPE_CHECKING:
 
 def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number]) -> List[Number]:
     """
-    Derives weights using the geometric mean method. Works for both crisp and fuzzy numbers.
+    Derives weights using the fuzzy geometric mean method.
+
+    .. note::
+        **Academic Note:** This method is a direct extension of the geometric mean
+        used in classical AHP. It is generally considered a robust and stable method
+        that correctly handles the ratio-scale nature of AHP judgments. It is often
+        recommended for its mathematical consistency and reliable results.
 
     Args:
         matrix: The comparison matrix of shape (n, n).
@@ -82,7 +88,20 @@ def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], max_iter=20
 
 def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[str, Any]:
     """
-    Chang's extent analysis method. Returns a dictionary with all intermediate results.
+    Implements Chang's (1996) extent analysis method for deriving weights from
+    TFN matrices.
+
+    .. note::
+        **Academic Note:** Extent Analysis is one of the most cited methods in
+        Fuzzy AHP literature. However, it has been subject to academic debate.
+        Its primary output is a vector of crisp weights derived from the "minimum
+        degree of possibility." Critics have pointed out that this can sometimes
+        result in a zero weight for a criterion that should not be zero, and the
+        method's mathematical properties differ from traditional AHP. It is
+        presented here due to its historical significance and widespread use.
+
+    Returns:
+        A dictionary containing weights, crisp_weights, possibility_matrix, etc.
     """
     n = matrix.shape[0]
     if not hasattr(matrix[0,0], 'possibility_degree'):
@@ -107,7 +126,7 @@ def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[s
     # Step 4: Normalize to get crisp weights
     weights_sum = np.sum(min_degrees)
     crisp_weights = min_degrees / weights_sum if weights_sum > 0 else np.full(n, 1/n)
-    
+
     # Represent final weights as TFNs
     fuzzy_weights = [number_type.from_crisp(w) for w in crisp_weights]
 
@@ -189,7 +208,7 @@ def derive_weights(
         A list of derived weights.
     """
     type_name = number_type.__name__
-    
+
     weights = []
     # --- Route to classic AHP methods for Crisp type ---
     if type_name == 'Crisp':

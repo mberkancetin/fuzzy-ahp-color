@@ -17,6 +17,18 @@ def aggregate_matrices(
     This function combines multiple comparison matrices from different participants
     into a single representative matrix using a specified aggregation technique.
 
+    .. note::
+        **Academic Note on Aggregation Methods:**
+        - **`geometric` (Default & Recommended):** The geometric mean is generally
+          preferred for aggregating judgments in AHP as it preserves the reciprocal
+          property of the matrices well and is less sensitive to extreme values.
+        - **`arithmetic`:** The arithmetic mean is simpler to understand but can be
+          unduly influenced by outlier judgments.
+        - **`median` & `min_max`:** These are robust statistical methods that can be useful
+          for understanding the range and central tendency of expert disagreement,
+          but they do not have the same theoretical foundation for AHP as the
+          geometric mean.
+
     Args:
         matrices: A list of comparison matrices. Each matrix should be a NumPy
                   array of NumericType objects (e.g., Crisp, TFN, TrFN).
