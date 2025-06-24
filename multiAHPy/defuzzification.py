@@ -197,7 +197,7 @@ class Defuzzification:
             elif method == "optimistic":
                 return fuzzy_number.u
             else:
-                raise ValueError(f"Unknown defuzzification method: {method}")
+                raise ValueError(f"Method '{method}' not implemented for TFN.")
         elif isinstance(fuzzy_number, TrFN):
             if method == "centroid":
                 return centroid_method_trfn(fuzzy_number)
@@ -218,4 +218,5 @@ class Defuzzification:
         elif hasattr(fuzzy_number, 'defuzzify'):
             return fuzzy_number.defuzzify(method, **kwargs)
         else:
-            raise TypeError(f"Unsupported type for defuzzification: {type(fuzzy_number)}")
+            type_name = type(fuzzy_number).__name__
+            raise TypeError(f"Unsupported type for defuzzification: {type_name}")
