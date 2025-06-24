@@ -685,45 +685,60 @@ def _create_report_dataframe(
     n = len(items)
 
     # --- Calculations ---
-    weights = derive_weights(matrix, model.number_type, derivation_method)
-    crisp_weights = [w.defuzzify(method=consistency_method) for w in weights]
+    results = derive_weights(matrix, model.number_type, derivation_method)
+    crisp_weights = results["crisp_weights"]
 
     ci, ri, cr = 0.0, 0.0, 0.0
     if n > 2:
         cr = Consistency.calculate_consistency_ratio(matrix, defuzzify_method=consistency_method)
-        crisp_matrix = np.array([[cell.defuzzify() for cell in row] for row in matrix])
+        crisp_matrix_for_eig = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
         try:
-            lambda_max = np.max(np.real(np.linalg.eig(crisp_matrix)[0]))
+            lambda_max = np.max(np.real(np.linalg.eig(crisp_matrix_for_eig)[0]))
             ci = (lambda_max - n) / (n - 1)
-        except np.linalg.LinAlgError: ci = -1
+        except np.linalg.LinAlgError:
+            ci = -1.0 # Indicate failure
         ri = Consistency._get_random_index(n)
 
     # --- Build DataFrame ---
     # 1. Matrix Data
-    data = []
+    matrix_data = []
     for i in range(n):
         row_data = {}
         for j in range(n):
             cell = matrix[i, j]
-            # Format the cell based on its type
-            if hasattr(cell, 'l'): # TFN or similar
-                 cell_str = f"({cell.l:.3f}, {cell.m:.3f}, {cell.u:.3f})"
-            elif hasattr(cell, 'value'): # Crisp
-                 cell_str = f"{cell.value:.3f}"
-            else: cell_str = str(cell)
-            row_data[items[j]] = cell_str
-        data.append(row_data)
+            # Use a robust way to format any NumericType
+            if isinstance(getattr(cell, 'l', None), float): # TFN-like
+                 row_data[items[j]] = f"({cell.l:.3f}, {cell.m:.3f}, {cell.u:.3f})"
+            elif isinstance(getattr(cell, 'value', None), float): # Crisp-like
+                 row_data[items[j]] = f"{cell.value:.3f}"
+            else: # Fallback for other types
+                 row_data[items[j]] = f"{cell.defuzzify():.3f}"
+        matrix_data.append(row_data)
+        
+    # 2. Add summary stats as strings
+    # Create empty rows for spacing
+    spacer_row = pd.Series(name='', dtype=str).to_frame().T
+    
+    # Use pd.concat to add rows, which is safer for mixed types
+    final_df = pd.concat([df, spacer_row])
 
-    df = pd.DataFrame(data, index=items)
+    # Add Weights row
+    weights_data = {items[i]: f"{w:.4f}" for i, w in enumerate(crisp_weights)}
+    weights_row = pd.DataFrame(weights_data, index=["Weights"])
+    final_df = pd.concat([final_df, weights_row])
 
-    # 2. Add empty rows for spacing, then add summary stats
-    df.loc[''] = '' # Spacer
-    df.loc['Weights'] = {items[i]: f"{w:.4f}" for i, w in enumerate(crisp_weights)}
-    df.loc['CR'] = {'': 'Consistency Ratio', items[0]: f"{cr:.4f}"}
-    df.loc['CI'] = {'': 'Consistency Index', items[0]: f"{ci:.4f}"}
-    df.loc['RI'] = {'': 'Random Index', items[0]: f"{ri:.2f}"}
+    # Add Consistency rows
+    cons_data = {
+        "CR": (f"{cr:.4f}", 'Consistency Ratio'),
+        "CI": (f"{ci:.4f}", 'Consistency Index'),
+        "RI": (f"{ri:.2f}", 'Random Index')
+    }
+    for key, (val, desc) in cons_data.items():
+        # Create a row with the description in the index and value in the first column
+        row = pd.DataFrame({items[0]: val}, index=[desc])
+        final_df = pd.concat([final_df, row])
 
-    return df
+    return final_df
 
 def _export_to_excel(model, filename, derivation_method, consistency_method):
     if not filename.endswith('.xlsx'):
