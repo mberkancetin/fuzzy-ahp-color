@@ -654,9 +654,9 @@ def export_full_report(
 
     # --- Dispatch to the correct export function ---
     if output_format.lower() == 'excel':
-        _export_to_excel(model, filename, derivation_method, consistency_method)
+        _export_to_excel(model, target, derivation_method, consistency_method)
     elif output_format.lower() == 'csv':
-        _export_to_csv(model, filename, derivation_method, consistency_method)
+        _export_to_csv(model, target, derivation_method, consistency_method)
     elif output_format.lower() == 'gsheet':
         if spreadsheet_id:
             _export_to_gsheet(model, spreadsheet_id, derivation_method, consistency_method, mode='open')
@@ -715,7 +715,6 @@ def _create_report_dataframe(
                  row_data[items[j]] = f"{cell.defuzzify():.3f}"
         matrix_data_as_strings.append(row_data)
         
-    # --- FIX IS HERE: Use a single, consistent DataFrame variable ---
     report_df = pd.DataFrame(matrix_data_as_strings, index=items)
 
     # 2. Add summary stats as new rows
