@@ -641,7 +641,6 @@ def export_full_report(
     elif output_format.lower() == 'csv':
         _export_to_csv(model, filename, derivation_method, consistency_method)
     elif output_format.lower() == 'gsheet':
-        _check_gsheet_availability()
         if spreadsheet_id:
             _export_to_gsheet(model, spreadsheet_id, derivation_method, consistency_method, mode='open')
         else:
