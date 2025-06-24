@@ -458,3 +458,341 @@ def plot_sensitivity_analysis(
 
     fig.tight_layout()
     return fig
+
+
+# ==============================================================================
+# 3. REPORTS
+# ==============================================================================
+
+def generate_matrix_report(
+    node_with_matrix: Node,
+    model: Hierarchy,
+    derivation_method: str = 'geometric_mean',
+    consistency_method: str = 'centroid'
+) -> str:
+    """
+    Generates a detailed, publication-ready text report for a single
+    pairwise comparison matrix.
+
+    This report includes the formatted matrix, derived weights, and a full
+    breakdown of consistency metrics (CI, CR, RI).
+
+    Args:
+        node_with_matrix: The parent Node whose children's comparison matrix
+                          is being reported.
+        model: The main Hierarchy object, needed to access the number_type.
+        derivation_method: The method used to derive weights.
+        consistency_method: The defuzzification method used for consistency checks.
+
+    Returns:
+        A formatted string containing the complete report for one matrix.
+    """
+    from .weight_derivation import derive_weights
+    from .consistency import Consistency
+
+    matrix = node_with_matrix.comparison_matrix
+    if matrix is None:
+        return f"--- No comparison matrix found for node '{node_with_matrix.id}' ---\n"
+
+    items = [child.id for child in node_with_matrix.children]
+    n = len(items)
+
+    # --- Calculations ---
+    weights = derive_weights(matrix, model.number_type, derivation_method)
+    crisp_weights = [w.defuzzify(method=consistency_method) for w in weights]
+
+    # Get consistency metrics
+    cr = Consistency.calculate_consistency_ratio(matrix, defuzzify_method=consistency_method)
+    # To get CI and RI, we can re-calculate parts of the CR logic
+    ci = 0.0
+    ri = 0.0
+    if n > 2:
+        crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
+        try:
+            eigenvalues, _ = np.linalg.eig(crisp_matrix)
+            lambda_max = np.max(np.real(eigenvalues))
+            ci = (lambda_max - n) / (n - 1)
+        except np.linalg.LinAlgError:
+            ci = -1 # Indicate failure
+        ri = Consistency._get_random_index(n)
+
+    # --- Formatting ---
+    report_lines = []
+
+    # 1. Header and Matrix
+    col_width = 25  # Width for each matrix column
+    header = f"{'':<10}" + "".join([f"{item:<{col_width}}" for item in items])
+    report_lines.append(header)
+    report_lines.append("-" * len(header))
+
+    for i, item_name in enumerate(items):
+        row_str = f"{item_name:<10}"
+        for j in range(n):
+            cell = matrix[i, j]
+            # Format the cell based on its type
+            if hasattr(cell, 'l'): # TFN or similar
+                 cell_str = f"({cell.l:.3f}, {cell.m:.3f}, {cell.u:.3f})"
+            elif hasattr(cell, 'value'): # Crisp
+                 cell_str = f"{cell.value:.3f}"
+            else:
+                 cell_str = str(cell)
+            row_str += f"{cell_str:<{col_width}}"
+        report_lines.append(row_str)
+
+    report_lines.append("-" * len(header))
+
+    # 2. Weights
+    weights_str = ", ".join([f"{w:.4f}" for w in crisp_weights])
+    report_lines.append(f"w_{node_with_matrix.id} = {{ {weights_str} }}")
+
+    # 3. Consistency Metrics
+    # In your example, "Degrees of Probability Min Values Normalized" seems to be another
+    # name for the weight vector. I'll use that terminology.
+    report_lines.append(f"Degrees of Probability Min Values Normalized: [{weights_str}]")
+    report_lines.append(f"CR, CI, RI: ({cr:.6f}, {ci:.6f}, {ri:.2f})")
+
+    return "\n".join(report_lines)
+
+def generate_full_report(
+    model: Hierarchy,
+    derivation_method: str = 'geometric_mean',
+    consistency_method: str = 'centroid',
+    filename: str | None = None
+) -> str:
+    """
+    Generates a comprehensive text report for all matrices in the AHP model.
+
+    Args:
+        model: The fully defined and calculated Hierarchy object.
+        derivation_method: The method to use for deriving weights.
+        consistency_method: The defuzzification method for consistency.
+        filename (optional): If provided, saves the report to a text file.
+
+    Returns:
+        The full report as a single string.
+    """
+    report_parts = []
+    title = "Fuzzy Matrices Analysis Report"
+    report_parts.append("=" * len(title))
+    report_parts.append(title)
+    report_parts.append("=" * len(title) + "\n")
+
+    def _traverse_and_report(node: Node):
+        if not node.is_leaf and node.comparison_matrix is not None:
+            # Add a title for this section
+            report_parts.append(f"\n--- Comparisons for Children of: {node.id} ---\n")
+            # Generate the report for this node's matrix
+            report_parts.append(generate_matrix_report(node, model, derivation_method, consistency_method))
+            report_parts.append("\n")
+
+        for child in node.children:
+            _traverse_and_report(child)
+
+    # Start the recursive report generation from the root
+    _traverse_and_report(model.root)
+
+    full_report = "\n".join(report_parts)
+
+    if filename:
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(full_report)
+            print(f"✅ Full analysis report saved to: {filename}")
+        except Exception as e:
+            print(f"❌ Error saving report file: {e}")
+
+    return full_report
+
+def export_full_report(
+    model: Hierarchy,
+    filename: str,
+    output_format: str = 'excel',
+    derivation_method: str = 'geometric_mean',
+    consistency_method: str = 'centroid'
+):
+    """
+    Generates a comprehensive analysis report and saves it to the specified format.
+
+    Args:
+        model: The fully calculated Hierarchy object.
+        filename: For 'excel' and 'csv', the path to the file.
+                  For 'gsheet', the desired name of the new Google Spreadsheet.
+        output_format (str, optional): The output format.
+                                       Options: 'excel', 'csv', 'gsheet'. Defaults to 'excel'.
+        derivation_method: The method for deriving weights.
+        consistency_method: The defuzzification method for consistency checks.
+    """
+    try:
+        import pandas as pd
+        _PANDAS_AVAILABLE = True
+    except ImportError:
+        _PANDAS_AVAILABLE = False
+
+    def _check_pandas_availability():
+        """Helper function to raise an error if pandas is not installed."""
+        if not _PANDAS_AVAILABLE:
+            raise ImportError("Excel/CSV export functionality requires the 'pandas' and 'openpyxl' libraries. "
+                            "Please install them using: pip install pandas openpyxl")
+
+    _check_pandas_availability() # Required for all formats now
+
+    # --- Dispatch to the correct export function ---
+    if output_format.lower() == 'excel':
+        _export_to_excel(model, filename, derivation_method, consistency_method)
+    elif output_format.lower() == 'csv':
+        _export_to_csv(model, filename, derivation_method, consistency_method)
+    elif output_format.lower() == 'gsheet':
+        _export_to_gsheet(model, filename, derivation_method, consistency_method)
+    else:
+        raise ValueError(f"Unsupported output_format: '{output_format}'. "
+                         "Choose from 'excel', 'csv', or 'gsheet'.")
+
+def _create_report_dataframe(
+    node_with_matrix: Node,
+    model: Hierarchy,
+    derivation_method: str,
+    consistency_method: str
+) -> pd.DataFrame:
+    """
+    Creates a pandas DataFrame for a single matrix report.
+    This is a helper for exporting to structured formats.
+    """
+    from .weight_derivation import derive_weights
+    from .consistency import Consistency
+
+    matrix = node_with_matrix.comparison_matrix
+    items = [child.id for child in node_with_matrix.children]
+    n = len(items)
+
+    # --- Calculations ---
+    weights = derive_weights(matrix, model.number_type, derivation_method)
+    crisp_weights = [w.defuzzify(method=consistency_method) for w in weights]
+
+    ci, ri, cr = 0.0, 0.0, 0.0
+    if n > 2:
+        cr = Consistency.calculate_consistency_ratio(matrix, defuzzify_method=consistency_method)
+        crisp_matrix = np.array([[cell.defuzzify() for cell in row] for row in matrix])
+        try:
+            lambda_max = np.max(np.real(np.linalg.eig(crisp_matrix)[0]))
+            ci = (lambda_max - n) / (n - 1)
+        except np.linalg.LinAlgError: ci = -1
+        ri = Consistency._get_random_index(n)
+
+    # --- Build DataFrame ---
+    # 1. Matrix Data
+    data = []
+    for i in range(n):
+        row_data = {}
+        for j in range(n):
+            cell = matrix[i, j]
+            # Format the cell based on its type
+            if hasattr(cell, 'l'): # TFN or similar
+                 cell_str = f"({cell.l:.3f}, {cell.m:.3f}, {cell.u:.3f})"
+            elif hasattr(cell, 'value'): # Crisp
+                 cell_str = f"{cell.value:.3f}"
+            else: cell_str = str(cell)
+            row_data[items[j]] = cell_str
+        data.append(row_data)
+
+    df = pd.DataFrame(data, index=items)
+
+    # 2. Add empty rows for spacing, then add summary stats
+    df.loc[''] = '' # Spacer
+    df.loc['Weights'] = {items[i]: f"{w:.4f}" for i, w in enumerate(crisp_weights)}
+    df.loc['CR'] = {'': 'Consistency Ratio', items[0]: f"{cr:.4f}"}
+    df.loc['CI'] = {'': 'Consistency Index', items[0]: f"{ci:.4f}"}
+    df.loc['RI'] = {'': 'Random Index', items[0]: f"{ri:.2f}"}
+
+    return df
+
+def _export_to_excel(model, filename, derivation_method, consistency_method):
+    if not filename.endswith('.xlsx'):
+        filename += '.xlsx'
+    try:
+        with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+            def _traverse_and_write(node: Node):
+                if not node.is_leaf and node.comparison_matrix is not None:
+                    df_report = _create_report_dataframe(node, model, derivation_method, consistency_method)
+                    sheet_name = node.id.replace(':', '').replace('\\', '').replace('/', '')[:31]
+                    df_report.to_excel(writer, sheet_name=sheet_name)
+                for child in node.children:
+                    _traverse_and_write(child)
+            _traverse_and_write(model.root)
+        print(f"✅ Excel report successfully saved to: {filename}")
+    except Exception as e:
+        print(f"❌ Error saving Excel report: {e}")
+
+def _export_to_csv(model, filename, derivation_method, consistency_method):
+    base_filename = filename[:-4] if filename.endswith('.csv') else filename
+    try:
+        def _traverse_and_write_csv(node: Node):
+            if not node.is_leaf and node.comparison_matrix is not None:
+                df_report = _create_report_dataframe(node, model, derivation_method, consistency_method)
+                csv_filename = f"{base_filename}_matrix_{node.id}.csv"
+                df_report.to_csv(csv_filename)
+                print(f"  - Saved {csv_filename}")
+            for child in node.children:
+                _traverse_and_write_csv(child)
+        print(f"✅ Exporting CSV reports with base name '{base_filename}':")
+        _traverse_and_write_csv(model.root)
+        print("CSV export complete.")
+    except Exception as e:
+        print(f"❌ Error saving CSV reports: {e}")
+
+def _export_to_gsheet(model, spreadsheet_name, derivation_method, consistency_method):
+    print("Starting Google Sheets export...")
+    try:
+        import gspread
+        from gspread_dataframe import set_with_dataframe
+        from google.colab import auth
+        from google.auth import default
+    except ImportError:
+        raise ImportError("Google Sheets export requires 'gspread', 'gspread-dataframe', and 'google-auth'. "
+                        "Install with: pip install gspread gspread-dataframe google-auth")
+
+    try:
+        # Step 1: Authenticate user in Colab environment
+        print("  - Authenticating with Google... Please follow the prompts.")
+        auth.authenticate_user()
+        creds, _ = default()
+        gc = gspread.authorize(creds)
+        print("  - Authentication successful.")
+
+        # Step 2: Create a new spreadsheet
+        spreadsheet = gc.create(spreadsheet_name)
+        print(f"  - Created new spreadsheet: '{spreadsheet_name}'")
+
+        # Step 3: Share with the user so they can access it
+        spreadsheet.share(None, perm_type='user', role='writer', notify=False) # Share with the authenticated user
+
+        # Step 4: Write data to sheets
+        def _traverse_and_upload(node: Node, first_sheet=True):
+            if not node.is_leaf and node.comparison_matrix is not None:
+                df_report = _create_report_dataframe(node, model, derivation_method, consistency_method)
+                sheet_name = node.id.replace(':', '').replace('\\', '').replace('/', '')[:31]
+
+                if first_sheet:
+                    # Use the first default sheet
+                    worksheet = spreadsheet.sheet1
+                    worksheet.update_title(sheet_name)
+                    first_sheet = False
+                else:
+                    # Create a new sheet
+                    worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=100, cols=20)
+
+                # Use gspread-dataframe to upload the DataFrame
+                set_with_dataframe(worksheet, df_report, include_index=True)
+                print(f"    - Uploaded report for '{node.id}' to sheet '{sheet_name}'.")
+
+            for child in node.children:
+                first_sheet = _traverse_and_upload(child, first_sheet)
+            return first_sheet
+
+        _traverse_and_upload(model.root)
+
+        print(f"\n✅ Google Sheets report successfully created!")
+        print(f"   You can access it at: {spreadsheet.url}")
+
+    except Exception as e:
+        print(f"\n❌ An error occurred during Google Sheets export: {e}")
+        print("   Please ensure you are running in a Google Colab environment and have granted permissions.")
