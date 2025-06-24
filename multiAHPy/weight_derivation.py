@@ -80,14 +80,13 @@ def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], max_iter=20
 # 2. FUZZY-SPECIFIC AHP ALGORITHMS
 # ==============================================================================
 
-def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> List[TFN]:
+def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[str, Any]:
     """
-    Chang's extent analysis method for deriving weights from TFN matrices.
+    Chang's extent analysis method. Returns a dictionary with all intermediate results.
     """
     n = matrix.shape[0]
-
     if not hasattr(matrix[0,0], 'possibility_degree'):
-        raise TypeError("Extent analysis method requires numbers that support 'possibility_degree' (e.g., TFNs).")
+        raise TypeError("Extent analysis requires TFNs with 'possibility_degree' method.")
 
     # Step 1: Calculate fuzzy synthetic extent values
     row_sums = [np.sum(matrix[i, :]) for i in range(n)]
@@ -95,26 +94,29 @@ def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> List[T
     inverse_total = total_sum.inverse()
     synthetic_extents = [rs * inverse_total for rs in row_sums]
 
-    # Step 2: Calculate degree of possibility
-    V = np.ones((n, n))
+    # Step 2: Calculate the degree of possibility matrix (V matrix)
+    V_matrix = np.ones((n, n))
     for i in range(n):
         for j in range(i, n):
-            # V(Si >= Sj) and V(Sj >= Si)
-            V[i, j] = synthetic_extents[i].possibility_degree(synthetic_extents[j])
-            V[j, i] = synthetic_extents[j].possibility_degree(synthetic_extents[i])
+            V_matrix[i, j] = synthetic_extents[i].possibility_degree(synthetic_extents[j])
+            V_matrix[j, i] = synthetic_extents[j].possibility_degree(synthetic_extents[i])
 
-    # Step 3: Calculate minimum degree of possibility and normalize
-    min_degrees = np.min(V, axis=1)
+    # Step 3: Calculate the minimum degree of possibility vector
+    min_degrees = np.array([min(V_matrix[i, j] for j in range(n) if i != j) for i in range(n)])
+
+    # Step 4: Normalize to get crisp weights
     weights_sum = np.sum(min_degrees)
+    crisp_weights = min_degrees / weights_sum if weights_sum > 0 else np.full(n, 1/n)
+    
+    # Represent final weights as TFNs
+    fuzzy_weights = [number_type.from_crisp(w) for w in crisp_weights]
 
-    if weights_sum == 0:
-        # Fallback: return equal crisp weights as TFNs
-        return [number_type(1/n, 1/n, 1/n) for _ in range(n)]
-
-    normalized_crisp_weights = min_degrees / weights_sum
-
-    # Result of extent analysis is a crisp weight vector, represented as TFNs
-    return [number_type(w, w, w) for w in normalized_crisp_weights]
+    return {
+        "weights": fuzzy_weights,
+        "crisp_weights": crisp_weights,
+        "possibility_matrix": V_matrix,
+        "min_degrees": min_degrees
+    }
 
 def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components: List[str]) -> List[Number]:
     """
