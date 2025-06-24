@@ -301,7 +301,14 @@ class Hierarchy(Generic[Number]):
         return generate_full_report(self, derivation_method=d_method,
                                     consistency_method=c_method, filename=filename)
 
-    def export_report(self, target: str, output_format: str = 'excel', spreadsheet_id: str | None = None, **kwargs):
+    def export_report(
+        self,
+        target: str,
+        output_format: str = 'excel',
+        spreadsheet_id: str | None = None,
+        derivation_method: str = 'geometric_mean',
+        consistency_method: str = 'centroid'
+    ):
         """
         Exports a detailed analysis report.
 
@@ -310,17 +317,25 @@ class Hierarchy(Generic[Number]):
             output_format: 'excel', 'csv', or 'gsheet'.
             spreadsheet_id (optional): If provided for 'gsheet', the script will open and
                                        update this existing spreadsheet by its ID/key.
-            **kwargs: derivation_method, consistency_method.
+            derivation_method: str = 'geometric_mean', # comparison matrix weight derivation methods
+                The method to use, one of:
+                    Crisp: "geometric_mean", "eigenvector"
+                    TFN: "geometric_mean", "extent_analysis", "llsm"
+                    TrFN: "geometric_mean", "extent_analysis", "llsm"
+                    GFN: "geometric_mean"
+            consistency_method: str = 'centroid' # defuzzification methods
+                The method to use, one of:
+                    Crisp: "centroid"
+                    TFN: "centroid", "graded_mean", "alpha_cut", "weighted_average", "pessimistic", "optimistic"
+                    TrFN: "centroid", "average"
+                    GFN: "centroid", "pessimistic_99_percent"
         """
         from .visualization import export_full_report
-        d_method = kwargs.get('derivation_method', 'geometric_mean')
-        c_method = kwargs.get('consistency_method', 'centroid')
-        
         export_full_report(
             model=self,
             target=target,
             output_format=output_format,
             spreadsheet_id=spreadsheet_id,
-            derivation_method=d_method,
-            consistency_method=c_method
+            derivation_method=derivation_method,
+            consistency_method=consistency_method
         )
