@@ -281,3 +281,37 @@ class Hierarchy(Generic[Number]):
         """Plots a sensitivity analysis for a given criterion and alternative."""
         from .visualization import plot_sensitivity_analysis
         return plot_sensitivity_analysis(self, parent_node_id, criterion_id, alt_name, figsize)
+
+    def full_report(self, filename: str | None = None, **kwargs) -> str:
+        """
+        Generates and prints or saves a comprehensive text report of all
+        matrices, weights, and consistency metrics in the model.
+
+        Args:
+            filename (optional): Path to save the report as a .txt file.
+            **kwargs: a_method, c_method
+        Returns:
+            The complete report as a string.
+        """
+        from .visualization import generate_full_report
+        # Allow user to specify methods, otherwise use defaults
+        d_method = kwargs.get('derivation_method', 'geometric_mean')
+        c_method = kwargs.get('consistency_method', 'centroid')
+
+        return generate_full_report(self, derivation_method=d_method,
+                                    consistency_method=c_method, filename=filename)
+
+    def export_report(self, filename: str, **kwargs):
+        """
+        Exports a detailed analysis of all matrices to a structured file.
+
+        Args:
+            filename: Path to save the report. Use '.xlsx' for a multi-sheet
+                      Excel file or '.csv' for multiple CSV files.
+            **kwargs: derivation_method, consistency_method
+        """
+        from .visualization import export_full_report
+        d_method = kwargs.get('derivation_method', 'geometric_mean')
+        c_method = kwargs.get('consistency_method', 'centroid')
+
+        export_full_report(self, filename, derivation_method=d_method, consistency_method=c_method)
