@@ -509,8 +509,8 @@ def generate_matrix_report(
     n = len(items)
 
     # --- Calculations ---
-    weights = derive_weights(matrix, model.number_type, derivation_method)
-    crisp_weights = [w.defuzzify(method=consistency_method) for w in weights]
+    results = derive_weights(matrix, model.number_type, derivation_method)
+    crisp_weights = results["crisp_weights"]
 
     # Get consistency metrics
     cr = Consistency.calculate_consistency_ratio(matrix, defuzzify_method=consistency_method)
@@ -556,12 +556,27 @@ def generate_matrix_report(
     weights_str = ", ".join([f"{w:.4f}" for w in crisp_weights])
     report_lines.append(f"w_{node_with_matrix.id} = {{ {weights_str} }}")
 
-    # 3. Consistency Metrics
-    # In your example, "Degrees of Probability Min Values Normalized" seems to be another
-    # name for the weight vector. I'll use that terminology.
-    report_lines.append(f"Degrees of Probability Min Values Normalized: [{weights_str}]")
-    report_lines.append(f"CR, CI, RI: ({cr:.6f}, {ci:.6f}, {ri:.2f})")
+    # 3. Degrees of Probability (Specific to Extent Analysis)
+    min_degrees = results.get("min_degrees")
+    if min_degrees is not None:
+        # Degrees of Probability Min Values Normalized are the final crisp weights
+        report_lines.append(f"Degrees of Probability Min Values Normalized: [{weights_str}]")
+    
+    V_matrix = results.get("possibility_matrix")
+    if V_matrix is not None:
+        report_lines.append("\n--- Degrees of Probability Matrix (V) ---\n")
+        v_header = f"{'':<10}" + "".join([f"{item:<10}" for item in items])
+        report_lines.append(v_header)
+        report_lines.append("-" * len(v_header))
+        for i, item_name in enumerate(items):
+            row_str = f"{item_name:<10}"
+            for j in range(n):
+                row_str += f"{V_matrix[i, j]:<10.4f}"
+            report_lines.append(row_str)
 
+    # 4. Consistency Metrics
+    report_lines.append(f"CR, CI, RI: ({cr:.6f}, {ci:.6f}, {ri:.2f})")
+    
     return "\n".join(report_lines)
 
 def generate_full_report(
