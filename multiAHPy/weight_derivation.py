@@ -166,7 +166,11 @@ def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components:
 # 3. THE PRIMARY DISPATCHER FUNCTION
 # ==============================================================================
 
-def derive_weights(matrix: np.ndarray, number_type: Type[Number], method: str = "geometric_mean") -> List[Number]:
+def derive_weights(
+    matrix: np.ndarray,
+    number_type: Type[Number],
+    method: str = "geometric_mean"
+) -> Dict[str, Any]:
     """
     Derives weights from a comparison matrix using the specified method.
     This function acts as a dispatcher, selecting the appropriate algorithm
@@ -185,14 +189,15 @@ def derive_weights(matrix: np.ndarray, number_type: Type[Number], method: str = 
         A list of derived weights.
     """
     type_name = number_type.__name__
-
+    
+    weights = []
     # --- Route to classic AHP methods for Crisp type ---
     if type_name == 'Crisp':
         from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
         if method == 'geometric_mean':
-            return geometric_mean_method(matrix, number_type)
+            weights =  geometric_mean_method(matrix, number_type)
         elif method == 'eigenvector':
-            return eigenvector_method(matrix, number_type)
+            weights =  eigenvector_method(matrix, number_type)
         else:
             raise ValueError(f"Method '{method}' is not supported for Crisp matrices. Use 'geometric_mean' or 'eigenvector'.")
 
@@ -200,13 +205,13 @@ def derive_weights(matrix: np.ndarray, number_type: Type[Number], method: str = 
     elif type_name == 'TFN':
         from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
         if method == 'geometric_mean':
-            return geometric_mean_method(matrix, number_type)
+            weights =  geometric_mean_method(matrix, number_type)
         elif method == 'extent_analysis':
             if not isinstance(matrix[0,0], TFN):
                  raise TypeError("Cannot use 'extent_analysis' on non-TFN matrix.")
             return extent_analysis_method(matrix, number_type)
         elif method == 'llsm':
-            return fuzzy_llsm_method(matrix, number_type, components=['l', 'm', 'u'])
+            weights =  fuzzy_llsm_method(matrix, number_type, components=['l', 'm', 'u'])
         else:
             raise ValueError(f"Method '{method}' is not supported for TFN. Use 'geometric_mean', 'extent_analysis', or 'llsm'.")
 
@@ -214,9 +219,9 @@ def derive_weights(matrix: np.ndarray, number_type: Type[Number], method: str = 
     elif type_name == 'TrFN':
         from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
         if method == 'geometric_mean':
-            return geometric_mean_method(matrix, number_type)
+            weights =  geometric_mean_method(matrix, number_type)
         elif method == 'llsm':
-            return fuzzy_llsm_method(matrix, number_type, components=['a', 'b', 'c', 'd'])
+            weights =  fuzzy_llsm_method(matrix, number_type, components=['a', 'b', 'c', 'd'])
         else:
             raise ValueError(f"Method '{method}' is not supported for TrFN. Use 'geometric_mean' or 'llsm'.")
 
@@ -224,9 +229,17 @@ def derive_weights(matrix: np.ndarray, number_type: Type[Number], method: str = 
     elif type_name == 'GFN':
         from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
         if method == 'geometric_mean':
-            return geometric_mean_method(matrix, number_type)
+            weights =  geometric_mean_method(matrix, number_type)
         else:
             raise ValueError(f"Method '{method}' is not supported for GFN. Currently only 'geometric_mean' is available.")
 
     else:
         raise TypeError(f"Weight derivation not implemented for number type: {type_name}")
+
+    crisp_weights = np.array([w.defuzzify() for w in weights])
+    return {
+        "weights": weights,
+        "crisp_weights": crisp_weights / np.sum(crisp_weights), # Normalize
+        "possibility_matrix": None, # Not applicable
+        "min_degrees": None # Not applicable
+    }
