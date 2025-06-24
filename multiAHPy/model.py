@@ -311,7 +311,7 @@ class Hierarchy(Generic[Number]):
             output_format (str, optional): 'excel', 'csv', or 'gsheet'. Defaults to 'excel'.
             **kwargs: Can include 'derivation_method' and 'consistency_method'.
         """
-        from .reporting import export_full_report
+        from .visualization import export_full_report
         d_method = kwargs.get('derivation_method', 'geometric_mean')
         c_method = kwargs.get('consistency_method', 'centroid')
         
