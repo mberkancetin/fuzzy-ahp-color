@@ -160,7 +160,8 @@ class Hierarchy(Generic[Number]):
         Helper for recursive local weight calculation.
         """
         if not node.is_leaf and node.comparison_matrix is not None:
-            weights = derive_weights(node.comparison_matrix, self.number_type, method)
+            results_dict = derive_weights(node.comparison_matrix, self.number_type, method)
+            weights = results_dict['weights']
             if len(weights) != len(node.children):
                 raise RuntimeError("Mismatch between number of derived weights and children.")
             for i, child_node in enumerate(node.children):
