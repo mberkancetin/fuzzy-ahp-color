@@ -21,7 +21,18 @@ if TYPE_CHECKING:
     from multiAHPy.model import Hierarchy, Node
     from multiAHPy.types import NumericType, Number, TFN, Crisp
 
+try:
+    import pandas as pd
+    _PANDAS_AVAILABLE = True
+except ImportError:
+    _PANDAS_AVAILABLE = False
 
+def _check_pandas_availability():
+    """Helper function to raise an error if pandas is not installed."""
+    if not _PANDAS_AVAILABLE:
+        raise ImportError("Excel/CSV export functionality requires the 'pandas' and 'openpyxl' libraries. "
+                        "Please install them using: pip install pandas openpyxl")
+            
 # ==============================================================================
 # 1. HTML HIERARCHY DIAGRAM
 # ==============================================================================
@@ -487,8 +498,8 @@ def generate_matrix_report(
     Returns:
         A formatted string containing the complete report for one matrix.
     """
-    from .weight_derivation import derive_weights
-    from .consistency import Consistency
+    from multiAHPy.weight_derivation import derive_weights
+    from multiAHPy.consistency import Consistency
 
     matrix = node_with_matrix.comparison_matrix
     if matrix is None:
@@ -622,18 +633,6 @@ def export_full_report(
         derivation_method: The method for deriving weights.
         consistency_method: The defuzzification method for consistency checks.
     """
-    try:
-        import pandas as pd
-        _PANDAS_AVAILABLE = True
-    except ImportError:
-        _PANDAS_AVAILABLE = False
-
-    def _check_pandas_availability():
-        """Helper function to raise an error if pandas is not installed."""
-        if not _PANDAS_AVAILABLE:
-            raise ImportError("Excel/CSV export functionality requires the 'pandas' and 'openpyxl' libraries. "
-                            "Please install them using: pip install pandas openpyxl")
-
     _check_pandas_availability() # Required for all formats now
 
     # --- Dispatch to the correct export function ---
@@ -657,8 +656,8 @@ def _create_report_dataframe(
     Creates a pandas DataFrame for a single matrix report.
     This is a helper for exporting to structured formats.
     """
-    from .weight_derivation import derive_weights
-    from .consistency import Consistency
+    from multiAHPy.weight_derivation import derive_weights
+    from multiAHPy.consistency import Consistency
 
     matrix = node_with_matrix.comparison_matrix
     items = [child.id for child in node_with_matrix.children]
