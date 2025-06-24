@@ -13,16 +13,55 @@ if TYPE_CHECKING:
 class FuzzyScale:
     """
     Handles the conversion of crisp Saaty-scale judgments (1-9) into various
-    types of fuzzy numbers.
+    fuzzy number types using different predefined conversion scales.
     """
+    _SCALES = {
+        "linear": { # A linear +/- 1 spread (except at boundaries)
+            1: (1, 1, 1), 2: (1, 2, 3), 3: (2, 3, 4), 4: (3, 4, 5),
+            5: (4, 5, 6), 6: (5, 6, 7), 7: (6, 7, 8), 8: (7, 8, 9), 9: (8, 9, 9)
+        },
+        "saaty_original": { # A common interpretation from literature
+            1: (1, 1, 1), 2: (1, 2, 3), 3: (2, 3, 4), 4: (3, 4, 5),
+            5: (4, 5, 6), 6: (5, 6, 7), 7: (6, 7, 8), 8: (7, 8, 9), 9: (9, 9, 9)
+        },
+        "wide": { # A wider, overlapping scale representing more uncertainty
+            1: (1, 1, 3), 2: (1, 2, 4), 3: (2, 3, 5), 4: (3, 4, 6),
+            5: (4, 5, 7), 6: (5, 6, 8), 7: (6, 7, 9), 8: (7, 8, 9), 9: (8, 9, 9)
+        },
+        "narrow": { # A scale with less uncertainty
+            1: (1, 1, 1), 2: (1.5, 2, 2.5), 3: (2.5, 3, 3.5), 4: (3.5, 4, 4.5),
+            5: (4.5, 5, 5.5), 6: (5.5, 6, 6.5), 7: (6.5, 7, 7.5), 8: (7.5, 8, 8.5), 9: (8.5, 9, 9)
+        }
+    }
+
     @staticmethod
-    def get_fuzzy_number(crisp_value: int, number_type: Type[Number], fuzziness: float = 1.0) -> Number:
+    def available_scales() -> List[str]:
+        """Returns a list of available scale types."""
+        return list(FuzzyScale._SCALES.keys())
+
+    @staticmethod
+    def get_fuzzy_number(
+        crisp_value: int,
+        number_type: Type[Number],
+        scale: str = 'linear',
+        fuzziness: float = None
+    ) -> Number:
         """
-        Converts a crisp judgment (1-9) to a fuzzy number of the specified type.
-        Handles reciprocals (e.g., -3 becomes the inverse of the fuzzy number for 3).
+        Converts a crisp judgment (1-9) to a fuzzy number using a named scale.
+
+        Args:
+            crisp_value: The Saaty scale integer (1-9 or -9 to -1 for reciprocals).
+            number_type: The target fuzzy number class (e.g., TFN, Crisp).
+            scale: The named scale to use ('linear', 'saaty_original', 'wide', etc.).
+
+        Returns:
+            An instance of the specified fuzzy number type.
         """
+        if scale not in FuzzyScale._SCALES:
+            raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_scales()}")
+
         if not isinstance(crisp_value, int) or not (1 <= abs(crisp_value) <= 9):
-            raise ValueError("Crisp judgment value must be an integer between 1 and 9 (or -9 and -1 for reciprocals).")
+            raise ValueError("Crisp judgment value must be an integer")
 
         type_name = number_type.__name__
         is_reciprocal = crisp_value < 0
@@ -35,7 +74,10 @@ class FuzzyScale:
         # Define standard spreads for TFN and TrFN based on fuzziness
         spread = fuzziness
         if type_name == 'TFN':
-            params = (max(1, value - spread), value, value + spread)
+            if spread:
+                params = (max(1, value - spread), value, value + spread)
+            else:
+                params = FuzzyScale._SCALES[scale][value]
         elif type_name == 'TrFN':
             params = (max(1, value - spread), value - spread/2, value + spread/2, value + spread)
         elif type_name == 'GFN':
@@ -84,7 +126,8 @@ def _get_matrix_size_from_list_len(num_judgments: int) -> int:
 def create_matrix_from_list(
     judgments: List[int | float],
     number_type: Type[Number],
-    fuzziness: float = 1.0
+    scale: str = 'linear',
+    fuzziness: float = None
 ) -> np.ndarray:
     """
     Creates a complete, reciprocal comparison matrix from a flattened list of
@@ -98,6 +141,7 @@ def create_matrix_from_list(
     Args:
         judgments: A flat list of crisp judgment values (1-9).
         number_type: The target number class (e.g., Crisp, TFN).
+        scale: The named scale to use ('linear', 'saaty_original', 'wide', etc.).
         fuzziness: The fuzziness factor for fuzzy conversions.
 
     Returns:
@@ -116,7 +160,7 @@ def create_matrix_from_list(
         for j in range(i + 1, size):
             try:
                 crisp_value = next(judgment_iterator)
-                matrix[i, j] = FuzzyScale.get_fuzzy_number(crisp_value, number_type, fuzziness)
+                matrix[i, j] = FuzzyScale.get_fuzzy_number(crisp_value, number_type, fuzziness=fuzziness, scale=scale)
             except StopIteration:
                 # This should not happen if _get_matrix_size_from_list_len is correct
                 raise ValueError("Mismatch between number of judgments and calculated matrix size.")
@@ -154,9 +198,16 @@ def complete_matrix_from_upper_triangle(matrix: np.ndarray) -> np.ndarray:
     return completed_matrix
 
 def create_matrix_from_judgments(
-    judgments: Dict[tuple, int], items: List[str], number_type: Type[Number], fuzziness: float = 1.0
+    judgments: Dict[tuple, int],
+    items: List[str],
+    number_type: Type[Number],
+    scale: str = 'linear',
+    fuzziness: float = None
 ) -> np.ndarray:
-    """Creates a complete comparison matrix from a dictionary of crisp upper-triangle judgments."""
+    """
+    Creates a complete comparison matrix from a dictionary of crisp judgments,
+    using a specified fuzzy conversion scale.
+    """
     n = len(items)
     item_map = {name: i for i, name in enumerate(items)}
     matrix = create_comparison_matrix(n, number_type)
@@ -171,7 +222,6 @@ def create_matrix_from_judgments(
         if i >= j:
             raise ValueError(f"Judgment '{item1}' vs '{item2}' is not in the upper triangle. Please only provide one judgment per pair.")
 
-        matrix[i, j] = FuzzyScale.get_fuzzy_number(value, number_type, fuzziness)
+        matrix[i, j] = FuzzyScale.get_fuzzy_number(value, number_type, fuzziness=fuzziness, scale=scale)
 
     return complete_matrix_from_upper_triangle(matrix)
-

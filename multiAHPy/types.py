@@ -187,8 +187,21 @@ class TFN:
         return self.__mul__(other)
 
     def __truediv__(self, other: Union[TFN, Crisp, float]) -> TFN:
-        o = self._get_other_as_tfn(other)
-        return self * o.inverse()
+        """Calculates self / other using the standard fuzzy arithmetic rule."""
+        if isinstance(other, TFN):
+            if other.l <= 0:
+                raise ZeroDivisionError("Cannot divide by a TFN whose range includes zero or negative numbers.")
+            return TFN(self.l / other.u, self.m / other.m, self.u / other.l)
+        elif isinstance(other, (int, float)):
+            if other == 0: raise ZeroDivisionError
+            # For division by a scalar, the order is preserved if positive
+            if other > 0:
+                return TFN(self.l / other, self.m / other, self.u / other)
+            else: # If dividing by a negative number, the bounds flip
+                return TFN(self.u / other, self.m / other, self.l / other)
+        elif hasattr(other, 'value'):
+            return self.__truediv__(other.value)
+        return NotImplemented
 
     def __rtruediv__(self, other: float) -> TFN:
         o = self._get_other_as_tfn(other)
@@ -330,8 +343,9 @@ class TrFN:
         return self.__mul__(other)
 
     def __truediv__(self, other: Union[TrFN, Crisp, float]) -> TrFN:
-        o = self._get_other_as_trfn(other)
-        return self * o.inverse()
+        if isinstance(other, TrFN):
+            if other.a <= 0: raise ZeroDivisionError(...)
+            return TrFN(self.a / other.d, self.b / other.c, self.c / other.b, self.d / other.a)
 
     def __rtruediv__(self, other: float) -> TrFN:
         o = self._get_other_as_trfn(other)
