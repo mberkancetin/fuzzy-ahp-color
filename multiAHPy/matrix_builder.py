@@ -125,24 +125,31 @@ def create_matrix_from_list(
     return complete_matrix_from_upper_triangle(matrix)
 
 def create_comparison_matrix(size: int, number_type: Type[Number]) -> np.ndarray:
-    """Creates an empty (n x n) matrix of a specific NumericType."""
+    """
+    Creates an (n x n) pairwise comparison matrix where each element
+    is an object of the specified number_type, initialized to the
+    multiplicative identity (e.g., 1).
+    """
     matrix = np.empty((size, size), dtype=object)
     identity = number_type.multiplicative_identity()
     for i in range(size):
-        matrix[i, i] = identity
+        for j in range(size):
+            matrix[i, j] = identity
+
     return matrix
 
 def complete_matrix_from_upper_triangle(matrix: np.ndarray) -> np.ndarray:
-    """Fills the lower triangle of a matrix using the reciprocals of the upper triangle."""
+    """Fills the lower triangle using reciprocals of the upper triangle."""
     n = matrix.shape[0]
     completed_matrix = matrix.copy()
+    identity_val = matrix[0,0].multiplicative_identity().defuzzify()
+
     for i in range(n):
         for j in range(i + 1, n):
-            # If the upper triangle cell is set, update the lower one
-            if completed_matrix[i, j] is not None and completed_matrix[i, j].centroid() != 0:
+            # Check if the upper-triangle element has been changed from its default identity value
+            if abs(completed_matrix[i, j].defuzzify() - identity_val) > 1e-9:
                 completed_matrix[j, i] = completed_matrix[i, j].inverse()
-            # If the lower is set but the upper is not, update the upper
-            elif completed_matrix[j, i] is not None and completed_matrix[j, i].centroid() != 0:
+            elif abs(completed_matrix[j, i].defuzzify() - identity_val) > 1e-9:
                  completed_matrix[i, j] = completed_matrix[j, i].inverse()
     return completed_matrix
 
@@ -167,3 +174,4 @@ def create_matrix_from_judgments(
         matrix[i, j] = FuzzyScale.get_fuzzy_number(value, number_type, fuzziness)
 
     return complete_matrix_from_upper_triangle(matrix)
+
