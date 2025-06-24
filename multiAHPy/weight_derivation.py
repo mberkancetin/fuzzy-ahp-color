@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 if TYPE_CHECKING:
-    from multiAHPy.types import NumericType, Number, TFN, Crisp
+    from .types import NumericType, Number, TFN, Crisp
 
 # ==============================================================================
 # 1. GENERIC & CLASSIC AHP ALGORITHMS
@@ -38,7 +38,7 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number]) -> List
     weights = [geo_mean * sum_inverse for geo_mean in row_geo_means]
     return weights
 
-def eigenvector_method(matrix: np.ndarray, number_type: Type[Number], max_iter=20, tol=1e-6) -> List[Number]:
+def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], max_iter=20, tol=1e-6) -> List[Number]:
     """
     Derives weights using the principal eigenvector method (Power Iteration).
     This implementation is for CRISP matrices only.
@@ -57,7 +57,9 @@ def eigenvector_method(matrix: np.ndarray, number_type: Type[Number], max_iter=2
 
     n = matrix.shape[0]
     # Extract float values from Crisp objects
-    crisp_matrix = np.array([[cell.value for cell in row] for row in matrix])
+    from .types import Crisp
+    crisp_matrix = np.array([[Crisp(cell) for cell in row] for row in matrix])
+    crisp_matrix = np.array([[cell.value for cell in row] for row in crisp_matrix])
 
     # Power method to find the principal eigenvector
     weights = np.ones(n)
