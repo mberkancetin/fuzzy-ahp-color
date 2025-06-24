@@ -618,8 +618,10 @@ def export_full_report(
     model: Hierarchy,
     target: str,
     output_format: str = 'excel',
-    spreadsheet_id: str | None = None, # New optional argument
-    **kwargs
+    spreadsheet_id: str | None = None,
+    *,  # Makes subsequent arguments keyword-only
+    derivation_method: str = 'geometric_mean',
+    consistency_method: str = 'centroid'
 ):
     """
     Generates a comprehensive analysis report and saves it to the specified format.
