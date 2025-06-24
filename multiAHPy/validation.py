@@ -173,7 +173,7 @@ class Validation:
         if matrix.shape[0] == 0: return errors # Handle empty matrix
         identity_one = matrix[0,0].multiplicative_identity()
         for i in range(matrix.shape[0]):
-            if abs(matrix[i, i].centroid() - identity_one.centroid()) > tolerance:
+            if abs(matrix[i, i].defuzzify() - identity_one.defuzzify()) > tolerance:
                 errors.append(f"Diagonal element at ({i},{i}) is not 1. Found: {matrix[i,i]}")
         return errors
 
@@ -188,7 +188,7 @@ class Validation:
                     inverse_val = matrix[j, i].inverse()
                     val = matrix[i, j]
                     # Compare the defuzzified centroids for a stable check
-                    if abs(val.centroid() - inverse_val.centroid()) > tolerance:
+                    if abs(val.defuzzify() - inverse_val.defuzzify()) > tolerance:
                         errors.append(f"Reciprocity failed between ({i},{j}) and ({j},{i}). "
                                       f"Value: {val}, Inverse of counterpart: {inverse_val}")
                 except Exception as e:
