@@ -30,7 +30,7 @@ class Node(Generic[Number]):
     def __repr__(self) -> str:
         local_w_str = f"{self.local_weight.defuzzify():.3f}" if self.local_weight is not None else "N/A"
         global_w_str = f"{self.global_weight.defuzzify():.4f}" if self.global_weight is not None else "N/A"
-        
+
         return (f"Node(id='{self.id}', local_weight={local_w_str}, "
                 f"global_weight={global_w_str}, children={len(self.children)})")
 
@@ -115,8 +115,41 @@ class Hierarchy(Generic[Number]):
         self.alternatives: List[Alternative[Number]] = []
         self.number_type = number_type
 
-    def add_alternative(self, alternative: Alternative):
-        self.alternatives.append(alternative)
+    def add_alternative(self, name: str, description: Optional[str] = None):
+        """
+        Adds a new alternative to the model.
+
+        Args:
+            name: The unique name of the alternative.
+            description: An optional description.
+
+        Raises:
+            ValueError: If an alternative with the same name already exists.
+        """
+        if any(alt.name == name for alt in self.alternatives):
+            raise ValueError(f"Alternative '{name}' already exists in the model.")
+
+        new_alt = Alternative(name, description)
+        self.alternatives.append(new_alt)
+
+    def get_alternative(self, name: str) -> Alternative[Number]:
+        """
+        Retrieves an alternative object by its name.
+
+        Args:
+            name: The name of the alternative to find.
+
+        Returns:
+            The Alternative object with the matching name.
+
+        Raises:
+            ValueError: If no alternative with the given name is found.
+        """
+        for alt in self.alternatives:
+            if alt.name == name:
+                return alt
+        # If the loop finishes without finding the alternative, raise an error.
+        raise ValueError(f"Alternative '{name}' not found in the model.")
 
     def _find_node(self, node_id: str, start_node: Optional[Node[Number]] = None) -> Optional[Node[Number]]:
         """Helper to find a node by its ID anywhere in the tree."""
