@@ -770,11 +770,11 @@ def _export_to_gsheet(
 
         spreadsheet = None
         if mode == 'create':
-            # WORKFLOW 1: Create a new spreadsheet
+            # Create a new spreadsheet
             spreadsheet = gc.create(name_or_id)
             print(f"  - Created new spreadsheet: '{name_or_id}'")
             # Share it back to the user
-            user_email = gc.auth.service_account_email if gc.auth.robot else gc.auth.user_info.get('email')
+            user_email = gc.auth.service_account_email if hasattr(gc.auth, 'service_account_email') else gc.auth.user_info.get('email')
             if user_email:
                 print(f"  - Sharing with {user_email}...")
                 spreadsheet.share(user_email, perm_type='user', role='writer', notify=False)
@@ -782,32 +782,64 @@ def _export_to_gsheet(
                 print("  - Warning: Could not determine user email to share sheet.")
 
         elif mode == 'open':
-            # WORKFLOW 2: Open an existing spreadsheet by ID/key
+            # Open an existing spreadsheet by its ID/key
             try:
                 spreadsheet = gc.open_by_key(name_or_id)
                 print(f"  - Successfully opened existing spreadsheet: '{spreadsheet.title}'")
                 # Clear all existing worksheets except the first one to start fresh
-                existing_sheets = spreadsheet.worksheets()[1:]
-                for sheet in reversed(existing_sheets): # Go in reverse to avoid index issues
-                    spreadsheet.del_worksheet(sheet)
-                spreadsheet.sheet1.clear() # Clear the first sheet
+                for worksheet in spreadsheet.worksheets()[1:]:
+                    spreadsheet.del_worksheet(worksheet)
+                if spreadsheet.worksheets(): # If there's at least one sheet
+                    spreadsheet.sheet1.clear()
+                    spreadsheet.sheet1.update_title("TempSheet") # Rename to avoid name conflicts
             except gspread.exceptions.SpreadsheetNotFound:
                 print(f"❌ Error: Spreadsheet with ID '{name_or_id}' not found.")
-                print("   Please ensure the ID is correct and you have access to the file.")
                 return
         
         if not spreadsheet:
             return
 
         # Step 2: Write data to sheets
-        def _traverse_and_upload(node: Node, is_first_sheet=True):
-            # ... (the logic for uploading DataFrames is identical to the last version) ...
-            # ... returns the new value of is_first_sheet ...
+        def _traverse_and_upload(node: Node, first_sheet=True):
+            """A nested helper function to recursively upload data."""
+            if not node.is_leaf and node.comparison_matrix is not None:
+                # Create a DataFrame for this node's matrix report
+                df_report = _create_report_dataframe(node, model, derivation_method, consistency_method)
+                
+                # Sanitize sheet name
+                sheet_name = node.id.replace(':', '').replace('\\', '').replace('/', '')[:31]
+                
+                if first_sheet and spreadsheet.worksheet("TempSheet"):
+                    # Use and rename the first default sheet
+                    worksheet = spreadsheet.sheet1
+                    worksheet.update_title(sheet_name)
+                else:
+                    # Create a new sheet
+                    worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=100, cols=20)
+                
+                # Use gspread-dataframe to upload the DataFrame
+                set_with_dataframe(worksheet, df_report, include_index=True)
+                print(f"    - Uploaded report for '{node.id}' to sheet '{sheet_name}'.")
+                first_sheet = False # Ensure subsequent calls create new sheets
+
+            for child in node.children:
+                # Pass the updated 'first_sheet' status down the recursion
+                first_sheet = _traverse_and_upload(child, first_sheet)
+                
+            return first_sheet # Return the final status
         
         _traverse_and_upload(model.root)
         
+        # Clean up by deleting the temporary sheet if it still exists
+        try:
+            temp_sheet = spreadsheet.worksheet("TempSheet")
+            if temp_sheet: spreadsheet.del_worksheet(temp_sheet)
+        except gspread.exceptions.WorksheetNotFound:
+            pass # It was correctly renamed, which is good.
+
         print(f"\n✅ Google Sheets report complete!")
         print(f"   URL: {spreadsheet.url}")
+        
     except Exception as e:
         print(f"\n❌ An error occurred during Google Sheets export: {e}")
         print("   Please ensure you are running in a Google Colab environment and have granted permissions.")
