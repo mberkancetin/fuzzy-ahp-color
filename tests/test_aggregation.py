@@ -125,8 +125,26 @@ def test_weighted_aggregation(sample_crisp_matrices):
 
 def test_aggregation_with_invalid_method():
     """Test that an invalid method raises a ValueError."""
+    # Create a valid test matrix using your Crisp wrapper, not raw floats.
+    # This correctly simulates how the library is meant to be used.
+    test_matrix = np.array([
+        [Crisp(1.0), Crisp(2.0)],
+        [Crisp(0.5), Crisp(1.0)]
+    ], dtype=object)
+
     with pytest.raises(ValueError, match="Unknown aggregation method"):
-        aggregate_matrices([np.eye(2)], method="invalid_method")
+        aggregate_matrices([test_matrix], method="invalid_method")
+
+def test_aggregation_with_invalid_method_using_eye():
+    """Another test for invalid method, showing how to convert np.eye."""
+
+    raw_matrix = np.eye(2) # e.g., [[1., 0.], [0., 1.]]
+
+    # Convert the raw float matrix into a matrix of Crisp objects
+    crisp_matrix = np.array([[Crisp(val) for val in row] for row in raw_matrix], dtype=object)
+
+    with pytest.raises(ValueError, match="Unknown aggregation method"):
+        aggregate_matrices([crisp_matrix], method="invalid_method")
 
 def test_aggregation_with_mismatched_shapes(sample_crisp_matrices):
     """Test that matrices with different shapes raise a ValueError."""
