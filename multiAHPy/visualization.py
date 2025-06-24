@@ -677,17 +677,17 @@ def _create_report_dataframe(
     Creates a pandas DataFrame for a single matrix report.
     This is a helper for exporting to structured formats.
     """
-    from multiAHPy.weight_derivation import derive_weights
-    from multiAHPy.consistency import Consistency
+    from .weight_derivation import derive_weights
+    from .consistency import Consistency
 
     matrix = node_with_matrix.comparison_matrix
     items = [child.id for child in node_with_matrix.children]
     n = len(items)
 
-    # --- Calculations ---
+    # --- Step 1: Perform ALL calculations first ---
     results = derive_weights(matrix, model.number_type, derivation_method)
     crisp_weights = results["crisp_weights"]
-
+    
     ci, ri, cr = 0.0, 0.0, 0.0
     if n > 2:
         cr = Consistency.calculate_consistency_ratio(matrix, defuzzify_method=consistency_method)
@@ -696,49 +696,53 @@ def _create_report_dataframe(
             lambda_max = np.max(np.real(np.linalg.eig(crisp_matrix_for_eig)[0]))
             ci = (lambda_max - n) / (n - 1)
         except np.linalg.LinAlgError:
-            ci = -1.0 # Indicate failure
+            ci = -1.0
         ri = Consistency._get_random_index(n)
 
-    # --- Build DataFrame ---
-    # 1. Matrix Data
-    matrix_data = []
+    # --- Step 2: Build the report content as strings ---
+    
+    # 1. Main Matrix Data
+    matrix_data_as_strings = []
     for i in range(n):
         row_data = {}
         for j in range(n):
             cell = matrix[i, j]
-            # Use a robust way to format any NumericType
-            if isinstance(getattr(cell, 'l', None), float): # TFN-like
+            if isinstance(getattr(cell, 'l', None), float):
                  row_data[items[j]] = f"({cell.l:.3f}, {cell.m:.3f}, {cell.u:.3f})"
-            elif isinstance(getattr(cell, 'value', None), float): # Crisp-like
+            elif isinstance(getattr(cell, 'value', None), float):
                  row_data[items[j]] = f"{cell.value:.3f}"
-            else: # Fallback for other types
+            else:
                  row_data[items[j]] = f"{cell.defuzzify():.3f}"
-        matrix_data.append(row_data)
+        matrix_data_as_strings.append(row_data)
         
-    # 2. Add summary stats as strings
-    # Create empty rows for spacing
-    spacer_row = pd.Series(name='', dtype=str).to_frame().T
-    
-    # Use pd.concat to add rows, which is safer for mixed types
-    final_df = pd.concat([df, spacer_row])
+    # --- FIX IS HERE: Use a single, consistent DataFrame variable ---
+    report_df = pd.DataFrame(matrix_data_as_strings, index=items)
+
+    # 2. Add summary stats as new rows
+    # Create an empty row for spacing
+    spacer = pd.DataFrame([[''] * n], columns=items, index=[' '])
+    report_df = pd.concat([report_df, spacer])
 
     # Add Weights row
     weights_data = {items[i]: f"{w:.4f}" for i, w in enumerate(crisp_weights)}
     weights_row = pd.DataFrame(weights_data, index=["Weights"])
-    final_df = pd.concat([final_df, weights_row])
+    report_df = pd.concat([report_df, weights_row])
 
     # Add Consistency rows
+    # For these, we create a row with a descriptive index and put the value in the first column
     cons_data = {
-        "CR": (f"{cr:.4f}", 'Consistency Ratio'),
-        "CI": (f"{ci:.4f}", 'Consistency Index'),
-        "RI": (f"{ri:.2f}", 'Random Index')
+        'Consistency Ratio': f"{cr:.4f}",
+        'Consistency Index': f"{ci:.4f}",
+        'Random Index': f"{ri:.2f}"
     }
-    for key, (val, desc) in cons_data.items():
-        # Create a row with the description in the index and value in the first column
-        row = pd.DataFrame({items[0]: val}, index=[desc])
-        final_df = pd.concat([final_df, row])
+    for desc, val in cons_data.items():
+        # Create a row with NaN for all columns except the first one
+        row_content = {col: '' for col in items}
+        row_content[items[0]] = val
+        row = pd.DataFrame(row_content, index=[desc])
+        report_df = pd.concat([report_df, row])
 
-    return final_df
+    return report_df
 
 def _export_to_excel(model, filename, derivation_method, consistency_method):
     if not filename.endswith('.xlsx'):
