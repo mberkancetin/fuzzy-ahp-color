@@ -269,12 +269,22 @@ class Hierarchy(Generic[Number]):
         alt.node_scores[node.id] = total_score
         return total_score
 
-    def calculate_alternative_scores(self):
+    def calculate_alternative_scores(self, derivation_method: str = 'geometric_mean'):
         """
         Calculates the final scores for all alternatives by synthesizing the
         weights through the entire hierarchy.
+
+        This method performs the final step of AHP, calculating the priority of
+        each alternative with respect to each leaf criterion and then aggregating
+        those priorities up the tree using the criteria weights.
+
+        Args:
+            derivation_method (str, optional): The method to use for deriving the
+                                               priorities of alternatives from their
+                                               comparison matrices.
+                                               Defaults to 'geometric_mean'.
         """
-        from .weight_derivation import derive_weights
+        from .weight_derivation import derive_weights # Local import
         print("\n--- Calculating Alternative Scores ---")
 
         if not self.alternatives:
@@ -286,14 +296,14 @@ class Hierarchy(Generic[Number]):
             raise ValueError("Hierarchy has no leaf nodes to calculate scores against.")
 
         # --- Step 1: Pre-calculate local priorities for alternatives under each leaf criterion ---
-        alt_local_priorities = {} # e.g., {'Price': [0.8, 0.2], 'CPU': [0.7, 0.3]}
-        alt_names = [alt.name for alt in self.alternatives]
+        alt_local_priorities = {}
 
         for leaf in leaf_nodes:
             if leaf.comparison_matrix is None:
                 raise ValueError(f"Leaf node '{leaf.id}' is missing its alternative comparison matrix.")
 
-            results = derive_weights(leaf.comparison_matrix, self.number_type)
+            results = derive_weights(leaf.comparison_matrix, self.number_type, method=derivation_method)
+
             alt_local_priorities[leaf.id] = results['crisp_weights']
 
         # --- Step 2: Calculate final score for each alternative ---
