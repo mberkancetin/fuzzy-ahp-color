@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, List, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, Dict, Optional, Tuple, Union, Any
 import uuid
 import numpy as np
 import matplotlib.pyplot as plt
@@ -36,14 +36,6 @@ def _check_pandas_availability():
 # ==============================================================================
 # 1. HTML HIERARCHY DIAGRAM
 # ==============================================================================
-
-from __future__ import annotations
-from typing import TYPE_CHECKING, Dict, Any
-import uuid
-
-if TYPE_CHECKING:
-    from .model import Hierarchy, Node
-    from .consistency import Consistency
 
 
 def _render_expandable_node(
@@ -411,7 +403,7 @@ def plot_final_rankings(model: Hierarchy, figsize=(10, 6)) -> 'plt.Figure':
     return fig
 
 def plot_sensitivity_analysis(
-    model: Hierarchy,  
+    model: Hierarchy,
     parent_node_id: str,
     criterion_to_vary_id: str,
     alternative_name: str,
