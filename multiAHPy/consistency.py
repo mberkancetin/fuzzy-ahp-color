@@ -118,7 +118,15 @@ class Consistency:
         n = matrix.shape[0]
         if n <= 2: return 0.0
 
-        crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
+        crisp_matrix = np.zeros((n, n))
+        for i in range(n):
+            for j in range(n):
+                cell = matrix[i, j]
+                if hasattr(cell, 'defuzzify'):
+                    crisp_matrix[i, j] = cell.defuzzify(method=consistency_method)
+                else:
+                    crisp_matrix[i, j] = float(cell)
+
         if np.any(crisp_matrix <= 0): return np.inf
 
         # Calculate weights using the geometric mean method
