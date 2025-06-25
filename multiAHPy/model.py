@@ -3,10 +3,10 @@ import numpy as np
 import json
 import pickle
 from typing import Dict, List, Optional, Tuple, Any, Type, Generic
-from multiAHPy.consistency import Consistency
-from multiAHPy.defuzzification import Defuzzification, normalize_crisp_weights
-from multiAHPy.weight_derivation import derive_weights
-from multiAHPy.types import TFN, Number
+from .consistency import Consistency
+from .defuzzification import Defuzzification, normalize_crisp_weights
+from .weight_derivation import derive_weights
+from .types import TFN, Number
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:

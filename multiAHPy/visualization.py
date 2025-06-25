@@ -18,8 +18,8 @@ except ImportError:
     _PLOT_AVAILABLE = False
 
 if TYPE_CHECKING:
-    from multiAHPy.model import Hierarchy, Node
-    from multiAHPy.types import NumericType, Number, TFN, Crisp
+    from .model import Hierarchy, Node
+    from .types import NumericType, Number, TFN, Crisp
 
 try:
     import pandas as pd
@@ -45,9 +45,7 @@ if TYPE_CHECKING:
     from .model import Hierarchy, Node
     from .consistency import Consistency
 
-# ... (_get_nodes_by_level remains the same) ...
 
-# --- UPDATED RENDERER FUNCTION ---
 def _render_expandable_node(
     node: Node,
     consistency_data: Dict[str, Any] | None = None,
@@ -62,9 +60,15 @@ def _render_expandable_node(
 
     # --- Prepare details for the expandable body ---
     details_html = "<ul>"
-    if is_alt:
-        # ... (Alternative details logic is the same) ...
-    else: # Hierarchy Node
+    if is_alt: # Alternative Node
+        score_str = f"{alt_obj.overall_score.defuzzify(method=consistency_method):.4f}" if alt_obj.overall_score else 'N/A'
+        details_html += f"<li><b>Final Score:</b> {score_str}</li>"
+        if alt_obj.performance_scores:
+            details_html += "<li><b>Performance Scores:</b><ul>"
+            for leaf_id, score in alt_obj.performance_scores.items():
+                details_html += f"<li>{leaf_id}: {score.defuzzify(method=consistency_method):.3f}</li>"
+            details_html += "</ul></li>"
+    else:
         local_w_str = f"{node.local_weight.defuzzify(method=consistency_method):.3f}" if node.local_weight else 'N/A'
         global_w_str = f"{node.global_weight.defuzzify(method=consistency_method):.4f}" if node.global_weight else 'N/A'
         parent_id_str = node.parent.id if node.parent else 'None'
@@ -73,7 +77,6 @@ def _render_expandable_node(
         details_html += f"<li><b>Local Weight:</b> {local_w_str}</li>"
         details_html += f"<li><b>Global Weight:</b> {global_w_str}</li>"
 
-        # --- NEW CONSISTENCY SECTION ---
         # Check if consistency data exists for this specific node
         if consistency_data and node.id in consistency_data:
             cons_info = consistency_data[node.id]
@@ -90,7 +93,6 @@ def _render_expandable_node(
             if "mikhailov_lambda" in cons_info and cons_info["mikhailov_lambda"] != "N/A":
                 details_html += f"<li>Mikhailov λ: {cons_info['mikhailov_lambda']}</li>"
             details_html += "</ul></li>"
-        # --- END OF NEW SECTION ---
 
     details_html += "</ul>"
 
@@ -128,7 +130,6 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None, cons
         if model.root.global_weight is None: model.calculate_weights()
     except Exception as e: print(f"Warning: Could not auto-calculate weights for display. Error: {e}")
 
-    # Calculate consistency for the entire model beforehand
     consistency_results = Consistency.check_model_consistency(model)
 
     # --- CSS AND JAVASCRIPT ---
@@ -244,7 +245,6 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None, cons
     # 3. Alternatives Stage
     alternatives_html = ""
     if model.alternatives:
-        # Sort alternatives by score before displaying
         ranked_alts = sorted(model.alternatives, key=lambda alt: alt.overall_score.defuzzify(method=consistency_method) if alt.overall_score else -1, reverse=True)
         alt_html_parts = [_render_expandable_node(None, is_alt=True, alt_obj=alt) for alt in ranked_alts]
 
@@ -257,7 +257,6 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None, cons
         </div>
         """
 
-    # Assemble the final document
     connector = '<div class="ahp-connector"></div>'
     full_html_body = f'{goal_html}{connector}{criteria_html}{connector}{alternatives_html}' if model.alternatives else f'{goal_html}{connector}{criteria_html}'
     full_document = f"""
@@ -266,7 +265,6 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None, cons
     <body><div class="ahp-viz-container">{full_html_body}</div></body></html>
     """
 
-    # Final step: Save to file or display
     if filename:
         try:
             with open(filename, 'w', encoding='utf-8') as f: f.write(full_document)
@@ -304,7 +302,6 @@ def format_model_summary(model: 'Hierarchy', alternative_name: str) -> str:
     lines.append("=" * len(header))
     lines.append(f"\nFINAL OVERALL SCORE: {alt.overall_score.defuzzify():.4f}\n")
 
-    # Iterate through the main criteria
     for crit_node in model.root.children:
         crit_weight = crit_node.local_weight.defuzzify()
         crit_score = alt.node_scores[crit_node.id].defuzzify()
@@ -315,7 +312,6 @@ def format_model_summary(model: 'Hierarchy', alternative_name: str) -> str:
         lines.append(f"  - Aggregated Performance Score for this Criterion: {crit_score:.4f}")
         lines.append(f"  - Contribution to Final Score: {crit_contribution:.4f}\n")
 
-        # Iterate through sub-criteria
         if not crit_node.is_leaf:
             lines.append("    Sub-criteria Breakdown:")
             for sub_crit_node in crit_node.children:
@@ -373,7 +369,6 @@ def plot_weights(model: Hierarchy, parent_node_id: str, figsize=(10, 6)) -> 'plt
     ax.set_title(f'Local Weight Distribution for Children of "{parent_node_id}"')
     ax.set_xticklabels(labels, rotation=45, ha="right")
 
-    # Add value labels on top of bars
     for bar in bars:
         yval = bar.get_height()
         plt.text(bar.get_x() + bar.get_width()/2.0, yval, f'{yval:.3f}', va='bottom', ha='center')
@@ -394,7 +389,7 @@ def plot_final_rankings(model: Hierarchy, figsize=(10, 6)) -> 'plt.Figure':
     """
     _check_plotting_availability()
 
-    rankings = model.get_rankings() # This already returns defuzzified, sorted results
+    rankings = model.get_rankings()
 
     alt_names = [r[0] for r in rankings]
     scores = [r[1] for r in rankings]
@@ -406,9 +401,8 @@ def plot_final_rankings(model: Hierarchy, figsize=(10, 6)) -> 'plt.Figure':
     ax.set_ylabel('Alternative')
     ax.set_title('Final Alternative Rankings')
     ax.grid(axis='x', linestyle='--', alpha=0.6)
-    ax.invert_yaxis() # Display the top-ranked alternative at the top
+    ax.invert_yaxis()
 
-    # Add value labels to the side of the bars
     for i, bar in enumerate(bars):
         ax.text(bar.get_width() + 0.005, bar.get_y() + bar.get_height()/2,
                 f'{scores[i]:.4f}', va='center')
@@ -417,7 +411,7 @@ def plot_final_rankings(model: Hierarchy, figsize=(10, 6)) -> 'plt.Figure':
     return fig
 
 def plot_sensitivity_analysis(
-    model: Hierarchy,  # <-- It accepts the model object
+    model: Hierarchy,  
     parent_node_id: str,
     criterion_to_vary_id: str,
     alternative_name: str,
@@ -532,8 +526,8 @@ def generate_matrix_report(
     Returns:
         A formatted string containing the complete report for one matrix.
     """
-    from multiAHPy.weight_derivation import derive_weights
-    from multiAHPy.consistency import Consistency
+    from .weight_derivation import derive_weights
+    from .consistency import Consistency
 
     matrix = node_with_matrix.comparison_matrix
     if matrix is None:
