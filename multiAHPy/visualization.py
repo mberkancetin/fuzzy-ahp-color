@@ -60,7 +60,10 @@ def _render_expandable_node(
         if alt_obj.performance_scores:
             details_html += "<li><b>Performance Scores:</b><ul>"
             for leaf_id, score in alt_obj.performance_scores.items():
-                details_html += f"<li>{leaf_id}: {score.defuzzify(method=consistency_method):.3f}</li>"
+                if hasattr(score, 'defuzzify'):
+                    details_html += f"<li>{leaf_id}: {score.defuzzify(method=consistency_method):.3f}</li>"
+                else:
+                    details_html += f"<li>{leaf_id}: {score:.3f}</li>"
             details_html += "</ul></li>"
     else:
         local_w_str = f"{node.local_weight.defuzzify(method=consistency_method):.3f}" if node.local_weight else 'N/A'
