@@ -11,7 +11,7 @@ correct and robust.
 import pytest
 import numpy as np
 
-from multiAHPy.types import Crisp, TFN, TrFN, GFN, IFN
+from multiAHPy.types import Crisp, TFN, TrFN, GFN, IFN, IT2TrFN
 
 # --- Test Data Fixtures ---
 
@@ -301,3 +301,123 @@ def test_ifn_from_crisp():
     # Test error handling for out-of-bounds crisp value
     with pytest.raises(ValueError):
         IFN.from_crisp(1.1)
+
+
+# ==============================================================================
+# Tests for IT2TrFN (Interval Type-2 Trapezoidal Fuzzy Number) Class
+# ==============================================================================
+
+@pytest.fixture
+def sample_it2_1() -> IT2TrFN:
+    """A standard IT2TrFN for testing."""
+    umf = TrFN(1, 3, 5, 7)
+    lmf = TrFN(2, 3.5, 4.5, 6)
+    return IT2TrFN(umf, lmf)
+
+@pytest.fixture
+def sample_it2_2() -> IT2TrFN:
+    """Another standard IT2TrFN for testing."""
+    umf = TrFN(2, 4, 6, 8)
+    lmf = TrFN(3, 4.5, 5.5, 7)
+    return IT2TrFN(umf, lmf)
+
+def test_it2trfn_initialization_valid(sample_it2_1):
+    """Test that a valid IT2TrFN can be created."""
+    assert isinstance(sample_it2_1.umf, TrFN)
+    assert isinstance(sample_it2_1.lmf, TrFN)
+    assert sample_it2_1.umf.b == 3
+    assert sample_it2_1.lmf.c == 4.5
+
+def test_it2trfn_initialization_invalid():
+    """Test that an invalid IT2TrFN (LMF not contained in UMF) raises an error."""
+    # LMF's lower bound is smaller than UMF's lower bound
+    umf = TrFN(2, 4, 6, 8)
+    invalid_lmf = TrFN(1, 5, 5, 7) # lmf.a < umf.a
+    with pytest.raises(ValueError, match='LMF must be contained within the UMF'):
+        IT2TrFN(umf, invalid_lmf)
+
+    # LMF's upper bound is larger than UMF's upper bound
+    invalid_lmf_2 = TrFN(3, 4, 5, 9) # lmf.d > umf.d
+    with pytest.raises(ValueError, match='LMF must be contained within the UMF'):
+        IT2TrFN(umf, invalid_lmf_2)
+
+def test_it2trfn_addition(sample_it2_1, sample_it2_2):
+    """Test addition of two IT2TrFNs."""
+    result = sample_it2_1 + sample_it2_2
+
+    # Expected UMF = (1+2, 3+4, 5+6, 7+8) = (3, 7, 11, 15)
+    # Expected LMF = (2+3, 3.5+4.5, 4.5+5.5, 6+7) = (5, 8, 10, 13)
+    assert isinstance(result, IT2TrFN)
+    assert result.umf == TrFN(3, 7, 11, 15)
+    assert result.lmf == TrFN(5, 8, 10, 13)
+
+def test_it2trfn_multiplication(sample_it2_1, sample_it2_2):
+    """Test multiplication of two IT2TrFNs."""
+    result = sample_it2_1 * sample_it2_2
+
+    # Expected UMF = (1*2, 3*4, 5*6, 7*8) = (2, 12, 30, 56)
+    # Expected LMF = (2*3, 3.5*4.5, 4.5*5.5, 6*7) = (6, 15.75, 24.75, 42)
+    assert isinstance(result, IT2TrFN)
+    assert result.umf == TrFN(2, 12, 30, 56)
+    assert result.lmf == TrFN(6, 15.75, 24.75, 42)
+
+def test_it2trfn_power():
+    """Test raising an IT2TrFN to a power."""
+    umf = TrFN(1, 2, 3, 4)
+    lmf = TrFN(1.5, 2, 2.5, 3.5)
+    it2 = IT2TrFN(umf, lmf)
+
+    result = it2 ** 2
+
+    assert result.umf == TrFN(1, 4, 9, 16)
+    assert result.lmf == TrFN(2.25, 4, 6.25, 12.25)
+
+def test_it2trfn_inverse(sample_it2_1):
+    """Test the inverse of an IT2TrFN."""
+    result = sample_it2_1.inverse()
+
+    assert result.umf == sample_it2_1.umf.inverse()
+    assert result.lmf == sample_it2_1.lmf.inverse()
+
+def test_it2trfn_defuzzification(sample_it2_1):
+    """Test the centroid_average defuzzification method."""
+    # UMF(1,3,5,7) -> centroid = 4.0
+    # LMF(2,3.5,4.5,6) -> centroid = 4.0
+    # Expected = (4.0 + 4.0) / 2 = 4.0
+    assert sample_it2_1.umf.defuzzify() == pytest.approx(4.0)
+    assert sample_it2_1.lmf.defuzzify() == pytest.approx(4.0)
+    assert sample_it2_1.defuzzify() == pytest.approx(4.0)
+
+def test_it2trfn_comparison(sample_it2_1, sample_it2_2):
+    """Test comparison between two IT2TrFNs based on their defuzzified value."""
+    # sample_it2_1 defuzzified = 4.0
+    # sample_it2_2 UMF(2,4,6,8) -> centroid = 5.0
+    # sample_it2_2 LMF(3,4.5,5.5,7) -> centroid = 5.0
+    # sample_it2_2 defuzzified = (5.0 + 5.0) / 2 = 5.0
+    assert sample_it2_1 < sample_it2_2
+    assert sample_it2_2 > sample_it2_1
+    assert not (sample_it2_1 == sample_it2_2)
+
+def test_it2trfn_from_crisp():
+    """Test creating an IT2TrFN from a crisp value."""
+    it2_crisp = IT2TrFN.from_crisp(5.0)
+
+    # Both UMF and LMF should be degenerate trapezoids at 5.0
+    expected_trfn = TrFN(5, 5, 5, 5)
+
+    assert it2_crisp.umf == expected_trfn
+    assert it2_crisp.lmf == expected_trfn
+
+    # Its defuzzified value should be 5.0
+    assert it2_crisp.defuzzify() == pytest.approx(5.0)
+
+def test_it2trfn_identities():
+    """Test neutral and multiplicative identity elements."""
+    identity = IT2TrFN.multiplicative_identity()
+    neutral = IT2TrFN.neutral_element()
+
+    assert identity.defuzzify() == 1.0
+    assert neutral.defuzzify() == 0.0
+
+    assert identity.umf == TrFN(1,1,1,1)
+    assert neutral.lmf == TrFN(0,0,0,0)

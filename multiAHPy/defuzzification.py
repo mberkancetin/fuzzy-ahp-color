@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from multiAHPy.types import TFN, TrFN, IFN, Crisp, GFN, NumericType, Number
+    from multiAHPy.types import TFN, TrFN, IFN, IT2TrFN, Crisp, GFN, NumericType, Number
 
 
 def centroid_method(fuzzy_number: TFN) -> float:
@@ -180,7 +180,7 @@ class Defuzzification:
         float
             The defuzzified value
         """
-        from .types import TFN, TrFN, GFN, IFN, Crisp
+        from .types import TFN, TrFN, GFN, IFN, Crisp, IT2TrFN
         if isinstance(fuzzy_number, TFN):
             if method == "centroid":
                 return centroid_method(fuzzy_number)
@@ -247,6 +247,14 @@ class Defuzzification:
             else:
                 raise ValueError(f"Unsupported defuzzification method '{method}' for IFN. "
                                 "Available methods: 'score', 'centroid', 'value', 'accuracy'.")
+        elif isinstance(fuzzy_number, IT2TrFN):
+            # Use a default method name if 'centroid' is passed, as it's ambiguous
+            if method == 'centroid_average' or method == 'centroid':
+                centroid_umf = fuzzy_number.umf.defuzzify(method='centroid')
+                centroid_lmf = fuzzy_number.lmf.defuzzify(method='centroid')
+                return (centroid_umf + centroid_lmf) / 2.0
+            else:
+                raise ValueError(f"Unsupported defuzzification method '{method}' for IT2TrFN.")
         elif isinstance(fuzzy_number, Crisp):
             return fuzzy_number.value
         # Fallback for other potential types

@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 if TYPE_CHECKING:
-    from multiAHPy.types import NumericType, Number, TFN, IFN, Crisp
+    from multiAHPy.types import NumericType, Number, TFN, IT2TrFN, TrFN, IFN, Crisp
 
 # ==============================================================================
 # 1. FUZZY SCALE CONVERSION
@@ -51,7 +51,9 @@ class FuzzyScale:
         crisp_value: int,
         number_type: Type[Number],
         scale: str = 'linear',
-        fuzziness: float = None
+        fuzziness: float = None,
+        umf_spread: float = 1.5,
+        lmf_spread: float = 0.5
     ) -> Number:
         """
         Converts a crisp judgment (1-9) to a fuzzy number using a named scale.
@@ -60,6 +62,9 @@ class FuzzyScale:
             crisp_value: The Saaty scale integer (1-9 or -9 to -1 for reciprocals).
             number_type: The target fuzzy number class (e.g., TFN, Crisp).
             scale: The named scale to use ('linear', 'saaty_original', 'wide', etc.).
+            fuzziness: GFN class only attribute.
+            umf_spread: IT2TrFN class only attribute to create a wider UMF
+            lmf_spread: IT2TrFN class only attribute to create a narrower LMF
 
         Returns:
             An instance of the specified fuzzy number type.
@@ -91,6 +96,14 @@ class FuzzyScale:
             params = (value, value * (fuzziness / 10.0))
         elif type_name == 'IFN':
             params = FuzzyScale._IFN_SCALE[value]
+        elif type_name == 'IT2TrFN':
+            l, m, u = FuzzyScale._SCALES[scale][abs(crisp_value)]
+
+            umf = TrFN.from_tfn(TFN(max(1, m-umf_spread), m, m+umf_spread))
+            lmf = TrFN.from_tfn(TFN(m-lmf_spread, m, m+lmf_spread))
+
+            it2_num = IT2TrFN(umf=umf, lmf=lmf)
+            return it2_num.inverse() if crisp_value < 0 else it2_num
         elif type_name == 'Crisp':
             params = (value,)
         else:

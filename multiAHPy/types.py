@@ -391,6 +391,11 @@ class TrFN:
     def from_crisp(value: float) -> TrFN:
         return TrFN(value, value, value, value)
 
+    @staticmethod
+    def from_tfn(tfn: TFN) -> TrFN:
+        """Converts a TFN to a degenerate TrFN."""
+        return TrFN(tfn.l, tfn.m, tfn.m, tfn.u)
+
     def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
         """Delegates defuzzification to the external Defuzzification class."""
         return Defuzzification.defuzzify(self, method, **kwargs)
@@ -647,6 +652,100 @@ class GFN:
         return Defuzzification.defuzzify(self, method, **kwargs)
 
 
+@total_ordering
+class IT2TrFN:
+    """
+    Implementation of an Interval Type-2 Trapezoidal Fuzzy Number.
+    It is defined by an Upper Membership Function (UMF) and a Lower
+    Membership Function (LMF), both of which are Type-1 Trapezoidal Fuzzy Numbers.
+
+    .. note::
+        **Academic Note:** Interval Type-2 Fuzzy Sets (IT2FS) capture a higher
+        degree of uncertainty by modeling the membership grade itself as an
+        interval. This is useful when experts are unsure even about the shape
+        of the fuzzy number representing their judgment.
+    """
+    def __init__(self, umf: TrFN, lmf: TrFN):
+        # Validate that LMF is "inside" UMF
+        if not (umf.a <= lmf.a and umf.b <= lmf.b and lmf.c <= umf.c and lmf.d <= umf.d):
+            raise ValueError('LMF must be contained within the UMF')
+        self.umf = umf # Upper Trapezoid
+        self.lmf = lmf # Lower Trapezoid
+
+    def __repr__(self) -> str:
+        return f"IT2TrFN(UMF={self.umf}, LMF={self.lmf})"
+
+    # --- Arithmetic Operations (Applied to both UMF and LMF) ---
+    def __add__(self, other: IT2TrFN) -> IT2TrFN:
+        if not isinstance(other, IT2TrFN): return NotImplemented
+        return IT2TrFN(
+            umf = self.umf + other.umf,
+            lmf = self.lmf + other.lmf
+        )
+
+    def __mul__(self, other: IT2TrFN) -> IT2TrFN:
+        if not isinstance(other, IT2TrFN): return NotImplemented
+        return IT2TrFN(
+            umf = self.umf * other.umf,
+            lmf = self.lmf * other.lmf
+        )
+
+    def power(self, exponent: float) -> IT2TrFN:
+        if not isinstance(exponent, (int, float)): return NotImplemented
+        return IT2TrFN(
+            umf = self.umf ** exponent,
+            lmf = self.lmf ** exponent
+        )
+
+    def __pow__(self, exponent: float) -> IT2TrFN:
+        return self.power(exponent)
+
+    # Reflected and other operators
+    def __radd__(self, other): return self.__add__(other)
+    def __rmul__(self, other): return self.__mul__(other)
+    # Subtraction and Division are complex for IT2FS and are omitted.
+    def __sub__(self, other): return NotImplemented
+    def __rsub__(self, other): return NotImplemented
+    def __truediv__(self, other): return NotImplemented
+    def __rtruediv__(self, other): return NotImplemented
+
+    # --- Comparison (Based on the average of the defuzzified UMF and LMF) ---
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, IT2TrFN):
+            return self.umf == other.umf and self.lmf == other.lmf
+        return False
+
+    def __lt__(self, other: IT2TrFN) -> bool:
+        if not isinstance(other, IT2TrFN): return NotImplemented
+        return self.defuzzify() < other.defuzzify()
+
+    # --- Protocol Utility Methods ---
+    def inverse(self) -> IT2TrFN:
+        return IT2TrFN(umf=self.umf.inverse(), lmf=self.lmf.inverse())
+
+    @staticmethod
+    def neutral_element() -> IT2TrFN:
+        return IT2TrFN(umf=TrFN.neutral_element(), lmf=TrFN.neutral_element())
+
+    @staticmethod
+    def multiplicative_identity() -> IT2TrFN:
+        return IT2TrFN(umf=TrFN.multiplicative_identity(), lmf=TrFN.multiplicative_identity())
+
+    def defuzzify(self, method: str = 'centroid_average', **kwargs) -> float:
+        """
+        Defuzzifies the IT2TrFN. The standard approach is to average the
+        centroids of the upper and lower membership functions.
+
+        Args:
+            method: 'centroid_average', 'centroid' (same).
+        """
+        return Defuzzification.defuzzify(self, method, **kwargs)
+
+    @staticmethod
+    def from_crisp(value: float) -> IT2TrFN:
+        """Creates a crisp IT2TrFN where UMF and LMF are identical crisp TrFNs."""
+        crisp_trfn = TrFN.from_crisp(value)
+        return IT2TrFN(umf=crisp_trfn, lmf=crisp_trfn)
 
 
 # ==============================================================================
