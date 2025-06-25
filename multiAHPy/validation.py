@@ -117,7 +117,7 @@ class Validation:
         return errors
 
     @staticmethod
-    def run_all_validations(model: Hierarchy, tolerance: float = 1e-6) -> Dict[str, List[str]]:
+    def run_all_validations(model: Hierarchy, tolerance: float = 1e-6, consistency_method: str = "centroid") -> Dict[str, List[str]]:
         """
         Runs a complete suite of validations on the Hierarchy.
 
@@ -141,7 +141,7 @@ class Validation:
         matrix_errors = []
         def _collect_matrices(node: 'Node'):
             if node.comparison_matrix is not None:
-                errors = Validation.validate_matrix_properties(node.comparison_matrix, tolerance)
+                errors = Validation.validate_matrix_properties(node.comparison_matrix, tolerance=tolerance, consistency_method=consistency_method)
                 if errors:
                     matrix_errors.extend([f"[Node: {node.id}] {e}" for e in errors])
             for child in node.children:
@@ -196,15 +196,15 @@ class Validation:
         return errors
 
     @staticmethod
-    def run_all_matrix_validations(matrix: np.ndarray, expected_size: int | None = None, tolerance: float = 1e-9) -> Dict[str, List[str]]:
+    def run_all_matrix_validations(matrix: np.ndarray, consistency_method: str = "centroid", expected_size: int | None = None, tolerance: float = 1e-9) -> Dict[str, List[str]]:
         """Runs a complete suite of validations on a single comparison matrix."""
         all_errors = {"dimensions": [], "diagonal": [], "reciprocity": []}
         all_errors["dimensions"] = Validation.validate_matrix_dimensions(matrix, expected_size)
 
         # Only run further checks if dimensions are valid
         if not all_errors["dimensions"]:
-            all_errors["diagonal"] = Validation.validate_matrix_diagonal(matrix, tolerance)
-            all_errors["reciprocity"] = Validation.validate_matrix_reciprocity(matrix, tolerance)
+            all_errors["diagonal"] = Validation.validate_matrix_diagonal(matrix, tolerance=tolerance, consistency_method=consistency_method)
+            all_errors["reciprocity"] = Validation.validate_matrix_reciprocity(matrix, tolerance=tolerance, consistency_method=consistency_method)
         return all_errors
 
     @staticmethod
