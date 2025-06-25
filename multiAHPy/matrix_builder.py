@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 if TYPE_CHECKING:
-    from multiAHPy.types import NumericType, Number, TFN, IT2TrFN, TrFN, IFN, Crisp
+    from .types import NumericType, Number, TFN, IT2TrFN, TrFN, IFN, Crisp
 
 # ==============================================================================
 # 1. FUZZY SCALE CONVERSION

@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from multiAHPy.types import TFN, TrFN, IFN, IT2TrFN, Crisp, GFN, NumericType, Number
+    from .types import TFN, TrFN, IFN, IT2TrFN, Crisp, GFN, NumericType, Number
 
 
 def centroid_method(fuzzy_number: TFN) -> float:

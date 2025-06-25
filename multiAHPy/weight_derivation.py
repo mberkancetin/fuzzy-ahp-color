@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 if TYPE_CHECKING:
-    from multiAHPy.types import NumericType, Number, TFN, Crisp, IFN, IT2TrFN
+    from .types import NumericType, Number, TFN, Crisp, IFN, IT2TrFN
 
 try:
     from scipy.optimize import minimize
@@ -75,7 +75,7 @@ def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], max_iter=20
 
     n = matrix.shape[0]
     # Extract float values from Crisp objects
-    from multiAHPy.types import Crisp
+    from .types import Crisp
     crisp_matrix = np.array([[Crisp(cell) for cell in row] for row in matrix])
     crisp_matrix = np.array([[cell.value for cell in row] for row in crisp_matrix])
 
