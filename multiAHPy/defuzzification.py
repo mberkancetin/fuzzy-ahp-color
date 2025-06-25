@@ -36,6 +36,11 @@ def graded_mean_integration(fuzzy_number: TFN) -> float:
     Defuzzify a triangular fuzzy number using the graded mean integration method.
     This method gives more weight to the middle value compared to the lower and upper bounds.
 
+    .. note::
+            For TFNs, 'graded_mean' (l+4m+u)/6 is often preferred as it is a
+            well-regarded method (e.g., Yager's approach) that considers all
+            points of the fuzzy number. 'centroid' (l+m+u)/3 is simpler.
+
     Parameters:
     -----------
     fuzzy_number : TFN
@@ -169,7 +174,7 @@ class Defuzzification:
         Parameters:
         -----------
         fuzzy_number : NumericType
-            The fuzzy or crisp number (TFN, TrFN, Crisp).
+            The fuzzy or crisp number (TFN, TrFN, GFN, IFN, IT2TrFN, Crisp).
         method : str
             Defuzzification method to use
         **kwargs : dict
@@ -235,6 +240,15 @@ class Defuzzification:
                 """
                 return fuzzy_number.mu + (fuzzy_number.pi * fuzzy_number.mu)
 
+            elif method == "entropy":
+                """
+                Calculates the Intuitionistic Fuzzy Entropy. This does not represent
+                the value of the number, but its degree of fuzziness or uncertainty.
+                A score of 0 means no fuzziness (crisp), 1 means maximum fuzziness.
+                Based on Burillo and Bustince (1996).
+                """
+                return 1.0 - abs(fuzzy_number.mu - fuzzy_number.nu)
+
             elif method == "accuracy":
                 """
                 Calculates the Accuracy Function (H = μ + ν). This value represents the
@@ -246,7 +260,7 @@ class Defuzzification:
 
             else:
                 raise ValueError(f"Unsupported defuzzification method '{method}' for IFN. "
-                                "Available methods: 'score', 'centroid', 'value', 'accuracy'.")
+                                "Available methods: 'score', 'centroid', 'value', 'entropy', 'accuracy'.")
         elif isinstance(fuzzy_number, IT2TrFN):
             # Use a default method name if 'centroid' is passed, as it's ambiguous
             if method == 'centroid_average' or method == 'centroid':

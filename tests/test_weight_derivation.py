@@ -61,7 +61,7 @@ def test_derive_weights_crisp_eigenvector(crisp_3x3_matrix):
 
 def test_derive_weights_tfn_geometric_mean(tfn_3x3_matrix):
     """Test geometric mean method for a TFN matrix."""
-    results = derive_weights(tfn_3x3_matrix, number_type=TFN, method='geometric_mean')
+    results = derive_weights(tfn_3x3_matrix, number_type=TFN, method='geometric_mean', consistency_method="centroid")
 
     # The result should be a list of TFN objects
     assert isinstance(results['weights'][0], TFN)
@@ -100,7 +100,7 @@ def test_derive_weights_unsupported_method_for_crisp(crisp_3x3_matrix):
 
 def test_derive_weights_unsupported_method_for_tfn(tfn_3x3_matrix):
     """Test that crisp-only methods fail for TFN types."""
-    with pytest.raises(ValueError, match="Method 'eigenvector' is not supported for TFN. Use 'geometric_mean', 'extent_analysis', or 'llsm'."):
+    with pytest.raises(ValueError, match="Method 'eigenvector' is not supported for TFN. Use 'geometric_mean', 'extent_analysis', 'llsm', 'lambda_max', or 'fuzzy_programming'."):
         derive_weights(tfn_3x3_matrix, number_type=TFN, method='eigenvector')
 
 def test_derive_weights_unsupported_type():

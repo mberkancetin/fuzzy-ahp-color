@@ -165,14 +165,37 @@ class Hierarchy(Generic[Number]):
 
     def set_comparison_matrix(self, parent_node_id: str, matrix: np.ndarray):
         """
-        Sets the pairwise comparison matrix for the children of a given node.
+        Sets the pairwise comparison matrix for the **sub-criteria** of a given parent node.
+        This method is for comparing elements at the same level of the hierarchy.
         """
         parent_node = self._find_node(parent_node_id)
         if parent_node is None:
             raise ValueError(f"Node '{parent_node_id}' not found.")
+        if parent_node.is_leaf:
+            raise ValueError(f"Cannot set a sub-criteria comparison matrix for a leaf node ('{parent_node_id}'). "
+                             "Use 'set_alternative_matrix' to compare alternatives for this criterion.")
         if len(parent_node.children) != matrix.shape[0]:
             raise ValueError(f"Matrix dimensions ({matrix.shape[0]}) do not match the number of children ({len(parent_node.children)}) for parent '{parent_node_id}'.")
         parent_node.comparison_matrix = matrix
+
+    def set_alternative_matrix(self, criterion_id: str, matrix: np.ndarray):
+        """
+        Sets the pairwise comparison matrix for the **alternatives** with respect
+        to a specific LEAF criterion.
+
+        Args:
+            criterion_id: The ID of the leaf node criterion for this comparison.
+            matrix: The n x n comparison matrix, where n is the number of alternatives.
+        """
+        criterion_node = self._find_node(criterion_id)
+        if criterion_node is None:
+            raise ValueError(f"Criterion node '{criterion_id}' not found.")
+        if not criterion_node.is_leaf:
+            raise ValueError(f"Can only set an alternative matrix for a leaf node criterion. '{criterion_id}' has children.")
+        if len(self.alternatives) != matrix.shape[0]:
+            raise ValueError(f"Alternative matrix dimensions ({matrix.shape[0]}) do not match the number of alternatives ({len(self.alternatives)}).")
+
+        criterion_node.comparison_matrix = matrix
 
     def calculate_weights(self, method: str = "extent_analysis"):
         """
@@ -202,7 +225,7 @@ class Hierarchy(Generic[Number]):
         for child in node.children:
             self._calculate_local_weights_recursive(child, method)
 
-    def calculate_alternative_scores(self):
+    def calculate_leaf_alternative_scores(self):
         """
         Calculates the scores for all alternatives at every level of the hierarchy.
         """
@@ -246,14 +269,72 @@ class Hierarchy(Generic[Number]):
         alt.node_scores[node.id] = total_score
         return total_score
 
-    def get_rankings(self, defuzzify_method: str = 'centroid', **kwargs) -> List[Tuple[str, float]]:
+    def calculate_alternative_scores(self):
+        """
+        Calculates the final scores for all alternatives by synthesizing the
+        weights through the entire hierarchy.
+        """
+        from .weight_derivation import derive_weights
+        print("\n--- Calculating Alternative Scores ---")
+
+        if not self.alternatives:
+            print("Warning: No alternatives in the model to score.")
+            return
+
+        leaf_nodes = self.root.get_all_leaf_nodes()
+        if not leaf_nodes:
+            raise ValueError("Hierarchy has no leaf nodes to calculate scores against.")
+
+        # --- Step 1: Pre-calculate local priorities for alternatives under each leaf criterion ---
+        alt_local_priorities = {} # e.g., {'Price': [0.8, 0.2], 'CPU': [0.7, 0.3]}
+        alt_names = [alt.name for alt in self.alternatives]
+
+        for leaf in leaf_nodes:
+            if leaf.comparison_matrix is None:
+                raise ValueError(f"Leaf node '{leaf.id}' is missing its alternative comparison matrix.")
+
+            results = derive_weights(leaf.comparison_matrix, self.number_type)
+            alt_local_priorities[leaf.id] = results['crisp_weights']
+
+        # --- Step 2: Calculate final score for each alternative ---
+        for i, alt in enumerate(self.alternatives):
+            alt.overall_score = self._calculate_score_recursive(self.root, i, alt_local_priorities)
+
+        print("Alternative scores calculation complete.")
+
+    def _calculate_score_recursive(
+        self,
+        node: Node[Number],
+        alternative_index: int,
+        alt_priorities: Dict[str, np.ndarray]
+    ) -> Number:
+        """
+        Recursively calculates the score for a single alternative from a specific node downwards.
+        """
+        # --- Base Case: If the node is a leaf, its score is the pre-calculated priority ---
+        if node.is_leaf:
+            priority_value = alt_priorities[node.id][alternative_index]
+            return self.number_type.from_crisp(priority_value)
+
+        # --- Recursive Step: Sum the weighted scores of children ---
+        total_score = self.number_type.neutral_element()
+        for child in node.children:
+            child_score = self._calculate_score_recursive(child, alternative_index, alt_priorities)
+            total_score += child_score * child.local_weight
+
+        alt = self.alternatives[alternative_index]
+        alt.node_scores[node.id] = total_score
+
+        return total_score
+
+    def get_rankings(self, consistency_method: str = 'centroid', **kwargs) -> List[Tuple[str, float]]:
         """
         Returns a sorted list of alternatives based on their overall scores.
         If scores are fuzzy, it defuzzifies them using the specified method
         before sorting to produce a crisp ranking.
 
         Args:
-            defuzzify_method (str, optional): The method to use for defuzzification.
+            consistency_method (str, optional): The method to use for defuzzification.
                                               Defaults to 'centroid'.
             **kwargs: Additional arguments to pass to the defuzzification function
                       (e.g., alpha for alpha_cut).
@@ -267,27 +348,25 @@ class Hierarchy(Generic[Number]):
         crisp_rankings = []
         for alt in self.alternatives:
             score = alt.overall_score
-            crisp_score = score.defuzzify(method=defuzzify_method, **kwargs)
+            crisp_score = score.defuzzify(method=consistency_method, **kwargs)
             crisp_rankings.append((alt.name, crisp_score))
 
         crisp_rankings.sort(key=lambda x: x[1], reverse=True)
         return crisp_rankings
 
-    def check_consistency(self, defuzzify_method: str = 'centroid', threshold: float = 0.1) -> Dict[str, Dict[str, Any]]:
+    def check_consistency(self, **kwargs) -> Dict[str, Dict[str, Any]]:
         """
-        Performs a comprehensive consistency check on all matrices in the model
-        by delegating to the Consistency class.
+        Performs a comprehensive consistency check on all matrices in the model.
 
         Args:
-            defuzzify_method (str, optional): The defuzzification method to use. Defaults to 'centroid'.
-            threshold (float, optional): The acceptable CR threshold. Defaults to 0.1.
+            **kwargs: Can include 'consistency_method' and 'saaty_cr_threshold'.
 
         Returns:
             A dictionary with detailed consistency results for each matrix in the model.
         """
         print("\n--- Checking All Matrix Consistencies ---")
-        # Simply call the static method from our new Consistency class
-        return Consistency.check_model_consistency(self, defuzzify_method, threshold)
+        from .consistency import Consistency
+        return Consistency.check_model_consistency(self, **kwargs)
 
     def display(self):
         """

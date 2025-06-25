@@ -16,19 +16,25 @@ class FuzzyScale:
     fuzzy number types using different predefined conversion scales.
     """
     _SCALES = {
-        "linear": { # A linear +/- 1 spread (except at boundaries)
+        # A common, simple scale with a consistent +/- 1 spread (except at boundaries).
+        # See, e.g., Mikhailov, L. (2004) for a similar linear approach.
+        "linear": {
             1: (1, 1, 1), 2: (1, 2, 3), 3: (2, 3, 4), 4: (3, 4, 5),
             5: (4, 5, 6), 6: (5, 6, 7), 7: (6, 7, 8), 8: (7, 8, 9), 9: (8, 9, 9)
         },
-        "saaty_original": { # A common interpretation from literature
+        # A scale often cited, e.g., in work by Ayhan & Kilic (2015). The value 9
+        # is often treated as crisp to represent absolute certainty.
+        "saaty_original": {
             1: (1, 1, 1), 2: (1, 2, 3), 3: (2, 3, 4), 4: (3, 4, 5),
             5: (4, 5, 6), 6: (5, 6, 7), 7: (6, 7, 8), 8: (7, 8, 9), 9: (9, 9, 9)
         },
-        "wide": { # A wider, overlapping scale representing more uncertainty
+        # A scale with a wider spread, representing higher uncertainty in judgments
+        "wide": {
             1: (1, 1, 3), 2: (1, 2, 4), 3: (2, 3, 5), 4: (3, 4, 6),
             5: (4, 5, 7), 6: (5, 6, 8), 7: (6, 7, 9), 8: (7, 8, 9), 9: (8, 9, 9)
         },
-        "narrow": { # A scale with less uncertainty
+        # A scale with a very small, uniform spread, representing high confidence.
+        "narrow": {
             1: (1, 1, 1), 2: (1.5, 2, 2.5), 3: (2.5, 3, 3.5), 4: (3.5, 4, 4.5),
             5: (4.5, 5, 5.5), 6: (5.5, 6, 6.5), 7: (6.5, 7, 7.5), 8: (7.5, 8, 8.5), 9: (8.5, 9, 9)
         }
@@ -72,12 +78,25 @@ class FuzzyScale:
         if scale not in FuzzyScale._SCALES:
             raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_scales()}")
 
-        if not isinstance(crisp_value, int) or not (1 <= abs(crisp_value) <= 9):
-            raise ValueError("Crisp judgment value must be an integer")
+        if not isinstance(crisp_value, (int, float)):
+            raise TypeError("Crisp judgment must be a number.")
+
+        is_reciprocal = False
+        value = crisp_value
+
+        if 0 < abs(value) < 1:
+            is_reciprocal = True
+            value = 1 / value
+
+        # Round the value to the nearest integer to use it as a key for our scales.
+        # This handles cases like 1/3 (0.333...) whose reciprocal is 3.
+        # It also handles a direct input of 3.1 being treated as 3.
+        value = int(round(value))
+
+        if not (1 <= value <= 9):
+            raise ValueError(f"Judgment value ({crisp_value}) must correspond to a Saaty scale value of 1-9.")
 
         type_name = number_type.__name__
-        is_reciprocal = crisp_value < 0
-        value = abs(crisp_value)
 
         # Base case: Equal importance
         if value == 1:
@@ -105,7 +124,7 @@ class FuzzyScale:
             it2_num = IT2TrFN(umf=umf, lmf=lmf)
             return it2_num.inverse() if crisp_value < 0 else it2_num
         elif type_name == 'Crisp':
-            params = (value,)
+            return number_type(crisp_value)
         else:
             raise TypeError(f"Unsupported number_type for fuzzy scaling: {type_name}")
 
@@ -204,18 +223,18 @@ def create_comparison_matrix(size: int, number_type: Type[Number]) -> np.ndarray
 
     return matrix
 
-def complete_matrix_from_upper_triangle(matrix: np.ndarray) -> np.ndarray:
+def complete_matrix_from_upper_triangle(matrix: np.ndarray, consistency_method: str = "centroid") -> np.ndarray:
     """Fills the lower triangle using reciprocals of the upper triangle."""
     n = matrix.shape[0]
     completed_matrix = matrix.copy()
-    identity_val = matrix[0,0].multiplicative_identity().defuzzify()
+    identity_val = matrix[0,0].multiplicative_identity().defuzzify(method=consistency_method)
 
     for i in range(n):
         for j in range(i + 1, n):
             # Check if the upper-triangle element has been changed from its default identity value
-            if abs(completed_matrix[i, j].defuzzify() - identity_val) > 1e-9:
+            if abs(completed_matrix[i, j].defuzzify(method=consistency_method) - identity_val) > 1e-9:
                 completed_matrix[j, i] = completed_matrix[i, j].inverse()
-            elif abs(completed_matrix[j, i].defuzzify() - identity_val) > 1e-9:
+            elif abs(completed_matrix[j, i].defuzzify(method=consistency_method) - identity_val) > 1e-9:
                  completed_matrix[i, j] = completed_matrix[j, i].inverse()
     return completed_matrix
 

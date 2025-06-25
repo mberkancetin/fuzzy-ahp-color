@@ -1,10 +1,11 @@
 from __future__ import annotations
-from typing import Dict, List, Any, TYPE_CHECKING
+from typing import Dict, List, Any, Type, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from multiAHPy.model import Hierarchy, Node
-    from multiAHPy.types import NumericType, Number, TFN
+    from .model import Hierarchy, Node
+    from .types import NumericType, Number, TFN
+
 
 class Consistency:
     """
@@ -13,10 +14,15 @@ class Consistency:
     """
 
     # Saaty's Random Consistency Index (RI) values
+    # Source: Saaty, T. L. (2008). Relative measurement and its generalization in
+    # decision making why pairwise comparisons are central in mathematics...
+    # RACSAM-Revista de la Real Academia de Ciencias Exactas, Fisicas y Naturales.
     _RI_VALUES = {
         1: 0.00, 2: 0.00, 3: 0.52, 4: 0.89, 5: 1.11, 6: 1.25, 7: 1.35,
         8: 1.40, 9: 1.45, 10: 1.49, 11: 1.52, 12: 1.54, 13: 1.56, 14: 1.58, 15: 1.59
     }
+
+    _GCI_THRESHOLDS = {3: 0.31, 4: 0.35} # Default for n>4 is 0.37
 
     @staticmethod
     def _get_random_index(n: int) -> float:
@@ -24,9 +30,14 @@ class Consistency:
         return Consistency._RI_VALUES.get(n, 1.60) # Default for n > 15
 
     @staticmethod
-    def calculate_consistency_ratio(matrix: np.ndarray, defuzzify_method: str = 'centroid') -> float:
+    def _get_gci_threshold(n: int) -> float:
+        return Consistency._GCI_THRESHOLDS.get(n, 0.37)
+
+    @staticmethod
+    def calculate_saaty_cr(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
         """
-        Calculates an approximate Consistency Ratio (CR) for a fuzzy comparison matrix
+        Calculates Saaty's traditional Consistency Ratio (CR) by first
+        defuzzifying the fuzzy matrix. This is a practical approximation
         using a numerically stable geometric mean method.
 
         .. warning::
@@ -40,7 +51,7 @@ class Consistency:
 
         Args:
             matrix: The comparison matrix of NumericType objects.
-            defuzzify_method: The method used to convert fuzzy numbers to crisp ones.
+            consistency_method: The method used to convert fuzzy numbers to crisp ones.
 
         Returns:
             The approximate consistency ratio (CR) as a float.
@@ -50,7 +61,7 @@ class Consistency:
             return 0.0
 
         # Defuzzify the matrix
-        crisp_matrix = np.array([[cell.defuzzify(method=defuzzify_method) for cell in row] for row in matrix])
+        crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
 
         # Validate matrix values
         if np.any(crisp_matrix <= 0):
@@ -87,24 +98,117 @@ class Consistency:
         return ci / ri
 
     @staticmethod
-    def check_model_consistency(model: Hierarchy, defuzzify_method: str = 'centroid', threshold: float = 0.1) -> Dict[str, Dict[str, Any]]:
+    def calculate_gci(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
         """
-        Checks the consistency of all comparison matrices in the entire AHP model.
+        Calculates the Geometric Consistency Index (GCI) for the matrix.
+        A lower GCI value indicates better consistency.
+
+        .. note::
+            **Academic Note:** GCI is an alternative to Saaty's CR. Thresholds
+            proposed by Aguarón & Moreno-Jiménez (2003) are often cited:
+            GCI <= 0.31 for n=3, <= 0.35 for n=4, <= 0.37 for n>4.
+        """
+        n = matrix.shape[0]
+        if n <= 2: return 0.0
+
+        crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
+        if np.any(crisp_matrix <= 0): return np.inf
+
+        # Calculate weights using the geometric mean method
+        log_matrix = np.log(crisp_matrix)
+        weights = np.exp(np.mean(log_matrix, axis=1))
+        weights /= np.sum(weights)
+
+        # Calculate GCI using the corrected formula
+        sum_of_squared_errors = 0
+        for i in range(n):
+            for j in range(i + 1, n): # Iterate through upper triangle
+                error = np.log(crisp_matrix[i, j]) - np.log(weights[i]) + np.log(weights[j])
+                sum_of_squared_errors += error**2
+
+        gci = (2 / ((n - 1) * (n - 2))) * sum_of_squared_errors
+        return gci
+
+    @staticmethod
+    def calculate_mikhailov_lambda(matrix: np.ndarray, number_type: Type[TFN]) -> float:
+        """
+        Calculates the consistency index (lambda) using Mikhailov's (2004)
+        Fuzzy Programming method.
+
+        .. note::
+            **Academic Note:** This is a true fuzzy consistency measure.
+            A value of λ > 0 indicates that a fully consistent crisp weight
+            vector exists within the bounds of the fuzzy judgments.
+            Values closer to 1 indicate higher consistency. A value of λ < 0
+            indicates inconsistency.
+        """
+        from .weight_derivation import mikhailov_fuzzy_programming
+
+        try:
+            results = mikhailov_fuzzy_programming(matrix, number_type)
+            if results['optimization_success']:
+                return results['lambda_consistency']
+            else:
+                return -1.0 # Return negative value to indicate optimization failure
+        except Exception:
+            return -1.0
+
+    @staticmethod
+    def check_model_consistency(
+        model: Hierarchy,
+        consistency_method: str = 'centroid',
+        saaty_cr_threshold: float = 0.1
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Performs a comprehensive consistency check on all matrices in the model,
+        calculating Saaty's CR, GCI, and Mikhailov's Lambda where applicable.
+
+        Args:
+            model: The Hierarchy (AHPModel) instance to check.
+            consistency_method: The defuzzification method used for CR and GCI.
+            saaty_cr_threshold: The acceptable threshold for Saaty's CR.
+
+        Returns:
+            A dictionary where keys are node IDs and values are a detailed
+            dictionary of all calculated consistency metrics.
         """
         results = {}
+        from .types import TFN
+        def _recursive_check(node: Node):
+            if node.comparison_matrix is not None:
+                matrix = node.comparison_matrix
+                n = matrix.shape[0]
+                node_results = {"matrix_size": n}
 
-        def _recursive_check(node: 'Node'):
-            if not node.is_leaf and node.comparison_matrix is not None:
-                n = node.comparison_matrix.shape[0]
-                cr = Consistency.calculate_consistency_ratio(node.comparison_matrix, defuzzify_method)
-                is_consistent = cr <= threshold
+                # --- Calculate all relevant metrics ---
+                # 1. Saaty's CR (Approximation)
+                saaty_cr = Consistency.calculate_saaty_cr(matrix, consistency_method)
+                node_results["saaty_cr"] = saaty_cr
 
-                results[node.id] = {
-                    "is_consistent": is_consistent,
-                    "consistency_ratio": cr,
-                    "matrix_size": n,
-                    "threshold": threshold
-                }
+                # 2. Geometric Consistency Index (GCI)
+                gci = Consistency.calculate_gci(matrix, consistency_method)
+                node_results["gci"] = gci
+
+                # 3. Mikhailov's Lambda (only for TFN matrices)
+                if isinstance(matrix[0,0], TFN):
+                    lambda_consistency = Consistency.calculate_mikhailov_lambda(matrix, TFN)
+                    node_results["mikhailov_lambda"] = lambda_consistency
+                else:
+                    node_results["mikhailov_lambda"] = "N/A"
+
+                # --- Determine overall consistency status ---
+                gci_threshold = Consistency._get_gci_threshold(n)
+
+                is_cr_ok = saaty_cr <= saaty_cr_threshold
+                is_gci_ok = gci <= gci_threshold
+
+                # Define overall consistency. We can say it's consistent if both
+                # major indices are below their respective thresholds.
+                node_results["is_consistent"] = is_cr_ok and is_gci_ok
+                node_results["saaty_cr_threshold"] = saaty_cr_threshold
+                node_results["gci_threshold"] = gci_threshold
+
+                results[node.id] = node_results
 
             for child in node.children:
                 _recursive_check(child)
@@ -113,7 +217,7 @@ class Consistency:
         return results
 
     @staticmethod
-    def get_consistency_recommendations(model: Hierarchy, inconsistent_node_id: str, defuzzify_method: str = 'centroid') -> List[str]:
+    def get_consistency_recommendations(model: Hierarchy, inconsistent_node_id: str, consistency_method: str = 'centroid') -> List[str]:
         """
         Provides specific recommendations for improving the consistency of a given matrix.
         """
@@ -122,7 +226,7 @@ class Consistency:
             return [f"Error: Node '{inconsistent_node_id}' not found or has no matrix."]
 
         matrix = node.comparison_matrix
-        crisp_matrix = np.array([[cell.defuzzify(method=defuzzify_method) for cell in row] for row in matrix])
+        crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
         n = matrix.shape[0]
 
         # Calculate weights from the crisp matrix using a robust method (geometric mean)
@@ -146,7 +250,7 @@ class Consistency:
                     inconsistent_pair = (i, j)
 
         recommendations = []
-        cr = Consistency.calculate_consistency_ratio(matrix)
+        cr = Consistency.calculate_saaty_cr(matrix)
         recommendations.append(f"Matrix for node '{node.id}' is inconsistent (CR = {cr:.4f}).")
 
         if inconsistent_pair[0] is None:

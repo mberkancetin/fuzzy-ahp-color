@@ -13,7 +13,7 @@ class Validation:
     """
 
     @staticmethod
-    def validate_matrix_properties(matrix: np.ndarray, tolerance: float = 1e-6) -> List[str]:
+    def validate_matrix_properties(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float = 1e-6) -> List[str]:
         """
         Validates a single comparison matrix for dimensions, diagonal, and reciprocity.
 
@@ -39,7 +39,7 @@ class Validation:
         # We check the defuzzified centroid value for the diagonal.
         identity_one = matrix[0,0].multiplicative_identity()
         for i in range(n):
-            if abs(matrix[i, i].defuzzify() - identity_one.defuzzify()) > tolerance:
+            if abs(matrix[i, i].defuzzify(method=consistency_method) - identity_one.defuzzify(method=consistency_method)) > tolerance:
                 errors.append(f"Diagonal element at ({i},{i}) is not 1. Found: {matrix[i,i]}")
 
         # 3. Validate Reciprocity
@@ -49,7 +49,7 @@ class Validation:
                 val = matrix[i, j]
 
                 # Compare the centroids of the two fuzzy numbers
-                if abs(val.defuzzify() - inverse_val.defuzzify()) > tolerance:
+                if abs(val.defuzzify(method=consistency_method) - inverse_val.defuzzify(method=consistency_method)) > tolerance:
                     errors.append(f"Reciprocity failed between ({i},{j}) and ({j},{i}). "
                                   f"Value: {val}, Inverse of counterpart: {inverse_val}")
 
@@ -167,18 +167,18 @@ class Validation:
         return errors
 
     @staticmethod
-    def validate_matrix_diagonal(matrix: np.ndarray, tolerance: float = 1e-9) -> List[str]:
+    def validate_matrix_diagonal(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float = 1e-9) -> List[str]:
         """Validates that diagonal elements are the multiplicative identity (e.g., 1)."""
         errors = []
         if matrix.shape[0] == 0: return errors # Handle empty matrix
         identity_one = matrix[0,0].multiplicative_identity()
         for i in range(matrix.shape[0]):
-            if abs(matrix[i, i].defuzzify() - identity_one.defuzzify()) > tolerance:
+            if abs(matrix[i, i].defuzzify(method=consistency_method) - identity_one.defuzzify(method=consistency_method)) > tolerance:
                 errors.append(f"Diagonal element at ({i},{i}) is not 1. Found: {matrix[i,i]}")
         return errors
 
     @staticmethod
-    def validate_matrix_reciprocity(matrix: np.ndarray, tolerance: float = 1e-9) -> List[str]:
+    def validate_matrix_reciprocity(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float = 1e-9) -> List[str]:
         """Validates the reciprocal property a_ji = 1/a_ij for the entire matrix."""
         errors = []
         n = matrix.shape[0]
@@ -188,7 +188,7 @@ class Validation:
                     inverse_val = matrix[j, i].inverse()
                     val = matrix[i, j]
                     # Compare the defuzzified centroids for a stable check
-                    if abs(val.defuzzify() - inverse_val.defuzzify()) > tolerance:
+                    if abs(val.defuzzify(method=consistency_method) - inverse_val.defuzzify(method=consistency_method)) > tolerance:
                         errors.append(f"Reciprocity failed between ({i},{j}) and ({j},{i}). "
                                       f"Value: {val}, Inverse of counterpart: {inverse_val}")
                 except Exception as e:

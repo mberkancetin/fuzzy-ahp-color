@@ -280,10 +280,16 @@ class TFN:
         return np.sqrt((d_l + d_m + d_u) / 3.0)
 
     # Additional methods as needed
-    def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
+    def defuzzify(self, method: str = 'graded_mean', **kwargs) -> float:
         """
         Delegates defuzzification to the external Defuzzification class.
         This keeps the data object (TFN) separate from the algorithm.
+
+        .. note::
+            For TFNs, 'graded_mean' (l+4m+u)/6 is often preferred as it is a
+            well-regarded method (e.g., Yager's approach) that considers all
+            points of the fuzzy number. 'centroid' (l+m+u)/3 is simpler.
+
         """
         return Defuzzification.defuzzify(self, method, **kwargs)
 
@@ -548,7 +554,7 @@ class IFN:
         Defuzzifies the IFN into a crisp value using various methods.
 
         Args:
-            method: 'centroid', 'score', 'accuracy', 'value'.
+            method: 'centroid', 'score', 'entropy', 'accuracy', 'value'.
         """
         return Defuzzification.defuzzify(self, method, **kwargs)
 
@@ -565,11 +571,19 @@ class IFN:
 @total_ordering
 class GFN:
     """
-    Implementation of a Gaussian Fuzzy Number (m, sigma), defined by a mean (m) and a
-    standard deviation (sigma). Fully implements the NumericType protocol.
+    Implementation of a Type-1 Gaussian Fuzzy Number (defined by mean and
+    standard deviation) (m, sigma), defined by a mean (m) and a standard
+    deviation (sigma). Fully implements the NumericType protocol.
 
     .. note::
-        **Academic Note:** The arithmetic operations (`+`, `*`, etc.) for GFNs
+        **Academic Note:** This class represents a standard Type-1 Gaussian
+        Fuzzy Number, defined by its mean (center) and standard deviation (spread).
+        The arithmetic operations implemented are common approximations that preserve
+        the Gaussian form. This is distinct from the more complex Interval Type-2
+        Fuzzy Sets discussed in some literature (e.g., Liu et al., 2020, Sec 6.2),
+        which model uncertainty about the membership function itself.
+
+        The arithmetic operations (`+`, `*`, etc.) for GFNs
         implemented here are common and practical approximations. True operations
         on Gaussian fuzzy numbers would result in non-Gaussian fuzzy numbers,
         requiring more complex representations. These approximations are widely
@@ -771,6 +785,8 @@ class IT2TrFN:
 
     def alpha_cut(self, alpha: float): return NotImplemented
 
+
+# Picture Fuzzy Sets
 
 # ==============================================================================
 # 3. GENERIC TYPE VARIABLE
