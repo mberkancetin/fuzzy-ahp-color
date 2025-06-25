@@ -53,8 +53,10 @@ def _render_expandable_node(
     # --- Prepare details for the expandable body ---
     details_html = "<ul>"
     if is_alt: # Alternative Node
-        score_str = f"{alt_obj.overall_score.defuzzify(method=consistency_method):.4f}" if alt_obj.overall_score else 'N/A'
+        score_val = alt_obj.overall_score
+        score_str = f"{score_val.defuzzify(method=consistency_method):.4f}" if score_val is not None else 'Not Calculated'
         details_html += f"<li><b>Final Score:</b> {score_str}</li>"
+
         if alt_obj.performance_scores:
             details_html += "<li><b>Performance Scores:</b><ul>"
             for leaf_id, score in alt_obj.performance_scores.items():
