@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from multiAHPy.types import TFN, TrFN, Crisp, GFN, NumericType, Number
+    from multiAHPy.types import TFN, TrFN, IFN, Crisp, GFN, NumericType, Number
 
 
 def centroid_method(fuzzy_number: TFN) -> float:
@@ -180,7 +180,7 @@ class Defuzzification:
         float
             The defuzzified value
         """
-        from .types import TFN, TrFN, GFN, Crisp
+        from .types import TFN, TrFN, GFN, IFN, Crisp
         if isinstance(fuzzy_number, TFN):
             if method == "centroid":
                 return centroid_method(fuzzy_number)
@@ -212,6 +212,41 @@ class Defuzzification:
                 return fuzzy_number.m - 3 * fuzzy_number.sigma
             else:
                 raise ValueError(f"Method '{method}' not implemented for GFN.")
+        elif isinstance(fuzzy_number, IFN):
+            # --- Academic Note on IFN Defuzzification ---
+            # Defuzzification of IFNs aims to convert the (μ, ν) pair into a single
+            # crisp value for ranking. Different methods exist based on how the
+            # hesitation degree (π = 1 - μ - ν) is handled.
+
+            if method == "score" or method == "centroid":
+                """
+                Calculates the Score Function (S = μ - ν). This is the most common
+                method for ranking IFNs. It represents the net degree of membership
+                over non-membership. A value of 1 is best, -1 is worst.
+                """
+                return fuzzy_number.mu - fuzzy_number.nu
+
+            elif method == "value":
+                """
+                Calculates a value by considering the hesitation degree (π) as potential
+                membership, distributed proportionally to the existing membership (μ).
+                Formula: V = μ + π*μ. This can be seen as a slightly more optimistic
+                measure than the simple score function.
+                """
+                return fuzzy_number.mu + (fuzzy_number.pi * fuzzy_number.mu)
+
+            elif method == "accuracy":
+                """
+                Calculates the Accuracy Function (H = μ + ν). This value represents the
+                degree of certainty or information about the judgment. It is typically
+                not used for primary ranking, but as a tie-breaker when two IFNs have
+                the same score.
+                """
+                return fuzzy_number.mu + fuzzy_number.nu
+
+            else:
+                raise ValueError(f"Unsupported defuzzification method '{method}' for IFN. "
+                                "Available methods: 'score', 'centroid', 'value', 'accuracy'.")
         elif isinstance(fuzzy_number, Crisp):
             return fuzzy_number.value
         # Fallback for other potential types

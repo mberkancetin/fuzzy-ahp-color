@@ -54,7 +54,14 @@ class Crisp:
     """
 
     def __init__(self, value: float):
-        self.value = float(value)
+        """
+        Initializes a Crisp number.
+        This constructor is idempotent: Crisp(Crisp(5.0)) is valid.
+        """
+        if isinstance(value, Crisp):
+            self.value = value.value
+        else:
+            self.value = float(value)
 
     def __repr__(self) -> str:
         return f"Crisp({self.value:.4f})"
@@ -393,6 +400,144 @@ class TrFN:
 
 
 @total_ordering
+class IFN:
+    """
+    Implementation of an Intuitionistic Fuzzy Number (μ, ν), representing
+    degrees of membership, non-membership, and hesitation (π = 1 - μ - ν).
+
+    .. note::
+        **Academic Note:** Intuitionistic Fuzzy Sets (IFS) by Atanassov (1986)
+        extend fuzzy sets by allowing for explicit modeling of hesitation. The
+        arithmetic operations implemented here are based on the standard IFS
+        algebra as defined by Atanassov and others.
+    """
+
+    def __init__(self, mu: float, nu: float):
+        mu, nu = float(mu), float(nu)
+        if not (0 <= mu <= 1 and 0 <= nu <= 1):
+            raise ValueError("Membership (mu) and non-membership (nu) must be between 0 and 1.")
+        if round(mu + nu, 9) > 1.0: # Use round to handle float precision issues
+            raise ValueError(f"Sum of membership and non-membership must not exceed 1, but mu+nu={mu+nu}.")
+        self.mu = mu
+        self.nu = nu
+        self.pi = 1.0 - self.mu - self.nu
+
+    def __repr__(self) -> str:
+        return f"IFN(μ={self.mu:.4f}, ν={self.nu:.4f})"
+
+    def _get_other_as_ifn(self, other: Union[IFN, Crisp, float]) -> IFN:
+        """Helper to convert other types to IFN for operations."""
+        if isinstance(other, IFN): return other
+        # A crisp number has no hesitation, so ν = 1 - μ
+        val = other.value if hasattr(other, 'value') else float(other)
+        if not (0 <= val <= 1):
+            raise ValueError("Cannot perform arithmetic with crisp value outside [0,1] against an IFN.")
+        return IFN(mu=val, nu=1-val)
+
+    # --- Arithmetic Operations ---
+    def __add__(self, other: IFN) -> IFN:
+        if not isinstance(other, IFN): return NotImplemented
+        return IFN(
+            mu = self.mu + other.mu - self.mu * other.mu,
+            nu = self.nu * other.nu
+        )
+
+    def __mul__(self, other: IFN) -> IFN:
+        if not isinstance(other, IFN): return NotImplemented
+        return IFN(
+            mu = self.mu * other.mu,
+            nu = self.nu + other.nu - self.nu * other.nu
+        )
+
+    # Subtraction and Division are not standardly defined for IFS in a way that
+    # is useful for AHP. They are often context-specific or not used at all.
+    # Returning NotImplemented is the correct, safe approach.
+    def __sub__(self, other): return NotImplemented
+    def __truediv__(self, other): return NotImplemented
+
+    # --- Reflected and Scalar Operations ---
+    def __radd__(self, other): return self.__add__(other)
+    def __rmul__(self, other): return self.__mul__(other)
+    def __rsub__(self, other): return NotImplemented
+    def __rtruediv__(self, other): return NotImplemented
+
+    def scale(self, scalar: float) -> IFN:
+        """Scalar multiplication (λ * A), a key IFS operation."""
+        if not (0 <= scalar):
+            raise ValueError("Scalar for IFN multiplication must be non-negative.")
+        return IFN(
+            mu = 1 - (1 - self.mu) ** scalar,
+            nu = self.nu ** scalar
+        )
+
+    def power(self, exponent: float) -> IFN:
+        """Raises the IFN to a scalar power (A ^ λ)."""
+        if not (0 <= exponent):
+            raise ValueError("Exponent for IFN must be non-negative.")
+        return IFN(
+            mu = self.mu ** exponent,
+            nu = 1 - (1 - self.nu) ** exponent
+        )
+
+    def __pow__(self, exponent: float) -> IFN:
+        return self.power(exponent)
+
+    # --- Comparison ---
+    def score(self) -> float:
+        """Score function S(A) = μ - ν. Used for ranking."""
+        return self.mu - self.nu
+
+    def accuracy(self) -> float:
+        """Accuracy function H(A) = μ + ν. Used as a tie-breaker."""
+        return self.mu + self.nu
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, IFN):
+            return self.mu == other.mu and self.nu == other.nu
+        return False
+
+    def __lt__(self, other: IFN) -> bool:
+        if not isinstance(other, IFN): return NotImplemented
+        # Standard comparison rule for IFNs
+        if self.score() < other.score():
+            return True
+        elif self.score() == other.score():
+            return self.accuracy() < other.accuracy()
+        return False
+
+    # --- Protocol Utility Methods ---
+    def inverse(self) -> IFN:
+        """The inverse (or complement) of an IFN is (ν, μ)."""
+        return IFN(mu=self.nu, nu=self.mu)
+
+    @staticmethod
+    def neutral_element() -> IFN:
+        """The additive identity for IFN: (0, 1), representing 'false' or full non-membership."""
+        return IFN(0.0, 1.0)
+
+    @staticmethod
+    def multiplicative_identity() -> IFN:
+        """The multiplicative identity for IFN: (1, 0), representing 'true' or full membership."""
+        return IFN(1.0, 0.0)
+
+    def defuzzify(self, method: str = 'score', **kwargs) -> float:
+        """
+        Defuzzifies the IFN into a crisp value using various methods.
+
+        Args:
+            method: 'centroid', 'score', 'accuracy', 'value'.
+        """
+        return Defuzzification.defuzzify(self, method, **kwargs)
+
+    @staticmethod
+    def from_crisp(value: float) -> IFN:
+        """Creates an IFN from a crisp value [0,1], assuming no hesitation."""
+        if not (0 <= value <= 1):
+            raise ValueError("Crisp value for IFN conversion must be between 0 and 1.")
+        return IFN(mu=value, nu=1.0 - value)
+
+
+@total_ordering
 class GFN:
     """
     Implementation of a Gaussian Fuzzy Number (m, sigma), defined by a mean (m) and a
@@ -500,6 +645,8 @@ class GFN:
 
     def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
         return Defuzzification.defuzzify(self, method, **kwargs)
+
+
 
 
 # ==============================================================================

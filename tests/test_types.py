@@ -11,7 +11,7 @@ correct and robust.
 import pytest
 import numpy as np
 
-from multiAHPy.types import Crisp, TFN, TrFN, GFN
+from multiAHPy.types import Crisp, TFN, TrFN, GFN, IFN
 
 # --- Test Data Fixtures ---
 
@@ -167,3 +167,137 @@ def test_gfn_arithmetic():
     assert isinstance(result, GFN)
     assert result.m == 30
     assert result.sigma == 5
+
+
+# ==============================================================================
+# Tests for IFN (Intuitionistic Fuzzy Number) Class
+# ==============================================================================
+
+@pytest.fixture
+def ifn1() -> IFN:
+    """Represents a standard IFN, e.g., 'Good'."""
+    return IFN(mu=0.6, nu=0.3)
+
+@pytest.fixture
+def ifn2() -> IFN:
+    """Represents another standard IFN, e.g., 'Fair'."""
+    return IFN(mu=0.5, nu=0.4)
+
+def test_ifn_initialization_and_pi():
+    """Test valid IFN creation and pi calculation."""
+    ifn = IFN(mu=0.7, nu=0.2)
+    assert ifn.mu == 0.7
+    assert ifn.nu == 0.2
+    assert ifn.pi == pytest.approx(0.1)
+
+def test_ifn_invalid_initialization():
+    """Test that invalid IFN values raise errors."""
+    # Test mu + nu > 1
+    with pytest.raises(ValueError, match="Sum of membership and non-membership must not exceed 1"):
+        IFN(0.7, 0.4)
+
+    # Test values outside [0, 1]
+    with pytest.raises(ValueError, match="must be between 0 and 1"):
+        IFN(-0.1, 0.5)
+    with pytest.raises(ValueError, match="must be between 0 and 1"):
+        IFN(0.5, 1.1)
+
+def test_ifn_addition(ifn1, ifn2):
+    """Test standard IFN addition (probabilistic sum)."""
+    # ifn1 = (0.6, 0.3); ifn2 = (0.5, 0.4)
+    # Expected mu = 0.6 + 0.5 - (0.6 * 0.5) = 1.1 - 0.3 = 0.8
+    # Expected nu = 0.3 * 0.4 = 0.12
+    result = ifn1 + ifn2
+    assert isinstance(result, IFN)
+    assert result.mu == pytest.approx(0.8)
+    assert result.nu == pytest.approx(0.12)
+
+def test_ifn_multiplication(ifn1, ifn2):
+    """Test standard IFN multiplication (probabilistic product)."""
+    # ifn1 = (0.6, 0.3); ifn2 = (0.5, 0.4)
+    # Expected mu = 0.6 * 0.5 = 0.3
+    # Expected nu = 0.3 + 0.4 - (0.3 * 0.4) = 0.7 - 0.12 = 0.58
+    result = ifn1 * ifn2
+    assert isinstance(result, IFN)
+    assert result.mu == pytest.approx(0.3)
+    assert result.nu == pytest.approx(0.58)
+
+def test_ifn_power(ifn1):
+    """Test raising an IFN to a power."""
+    # ifn1 = (0.6, 0.3) raised to power 2
+    # Expected mu = 0.6^2 = 0.36
+    # Expected nu = 1 - (1 - 0.3)^2 = 1 - 0.7^2 = 1 - 0.49 = 0.51
+    result = ifn1 ** 2
+    assert result.mu == pytest.approx(0.36)
+    assert result.nu == pytest.approx(0.51)
+
+def test_ifn_scale(ifn1):
+    """Test scalar multiplication (scaling) of an IFN."""
+    # ifn1 = (0.6, 0.3) scaled by 0.5
+    # Expected mu = 1 - (1 - 0.6)^0.5 = 1 - 0.4^0.5 = 1 - 0.632 = 0.368
+    # Expected nu = 0.3^0.5 = 0.547
+    result = ifn1.scale(0.5)
+    assert result.mu == pytest.approx(1 - (1 - 0.6)**0.5)
+    assert result.nu == pytest.approx(0.3**0.5)
+
+def test_ifn_comparison(ifn1, ifn2):
+    """Test the score and accuracy based comparison logic."""
+    # Test 1: Simple score comparison
+    # ifn1 (0.6, 0.3): score = 0.3
+    # ifn2 (0.5, 0.4): score = 0.1
+    assert ifn1.score() > ifn2.score()
+    assert ifn1 > ifn2
+    assert ifn2 < ifn1
+
+    # --- FIX IS HERE: Use valid IFNs for the tie-breaker test ---
+    # Test 2: Equal scores, different accuracy
+    ifn_low_accuracy = IFN(0.5, 0.2)  # score = 0.3, accuracy = 0.7
+    ifn_high_accuracy = IFN(0.6, 0.3) # ifn1, score = 0.3, accuracy = 0.9
+
+    # Verify scores are equal and accuracies are different
+    assert ifn_low_accuracy.score() == pytest.approx(ifn_high_accuracy.score())
+    assert ifn_high_accuracy.accuracy() > ifn_low_accuracy.accuracy()
+
+    # The one with higher accuracy should be considered "greater" in a tie
+    assert ifn_high_accuracy > ifn_low_accuracy
+    assert not (ifn_low_accuracy > ifn_high_accuracy)
+
+    # Test 3: Equal score and equal accuracy should not be greater/less than
+    ifn_clone = IFN(0.6, 0.3)
+    assert not (ifn_high_accuracy > ifn_clone)
+    assert not (ifn_high_accuracy < ifn_clone)
+    # They should be equal, which is tested by the __eq__ method
+    assert ifn_high_accuracy == ifn_clone
+
+def test_ifn_identities():
+    """Test neutral and multiplicative identity elements."""
+    assert IFN.neutral_element() == IFN(0.0, 1.0)
+    assert IFN.multiplicative_identity() == IFN(1.0, 0.0)
+
+def test_ifn_inverse(ifn1):
+    """Test the complement/inverse of an IFN."""
+    assert ifn1.inverse() == IFN(0.3, 0.6)
+
+def test_ifn_defuzzification(ifn1):
+    """Test the different defuzzification methods for IFN."""
+    # ifn1 = (0.6, 0.3) -> pi = 0.1
+
+    # Score method: 0.6 - 0.3 = 0.3
+    assert ifn1.defuzzify(method='score') == pytest.approx(0.3)
+    # Centroid method should be an alias for score
+    assert ifn1.defuzzify(method='centroid') == pytest.approx(0.3)
+
+    # Value method: mu + pi*mu = 0.6 + (0.1 * 0.6) = 0.6 + 0.06 = 0.66
+    assert ifn1.defuzzify(method='value') == pytest.approx(0.66)
+
+def test_ifn_from_crisp():
+    """Test creating an IFN from a crisp value [0, 1]."""
+    ifn = IFN.from_crisp(0.8)
+    assert isinstance(ifn, IFN)
+    assert ifn.mu == 0.8
+    assert ifn.nu == pytest.approx(0.2)
+    assert ifn.pi == pytest.approx(0.0)
+
+    # Test error handling for out-of-bounds crisp value
+    with pytest.raises(ValueError):
+        IFN.from_crisp(1.1)

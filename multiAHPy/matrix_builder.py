@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 if TYPE_CHECKING:
-    from multiAHPy.types import NumericType, Number, TFN, Crisp
+    from multiAHPy.types import NumericType, Number, TFN, IFN, Crisp
 
 # ==============================================================================
 # 1. FUZZY SCALE CONVERSION
@@ -32,6 +32,13 @@ class FuzzyScale:
             1: (1, 1, 1), 2: (1.5, 2, 2.5), 3: (2.5, 3, 3.5), 4: (3.5, 4, 4.5),
             5: (4.5, 5, 5.5), 6: (5.5, 6, 6.5), 7: (6.5, 7, 7.5), 8: (7.5, 8, 8.5), 9: (8.5, 9, 9)
         }
+    }
+
+    _IFN_SCALE = {
+        # Based on Nguyen (2019), "A new method...using intuitionistic fuzzy numbers"
+        # (mu, nu) pairs for linguistic terms 1 through 9
+        1: (0.50, 0.40), 2: (0.55, 0.35), 3: (0.60, 0.30), 4: (0.65, 0.25),
+        5: (0.70, 0.20), 6: (0.75, 0.15), 7: (0.80, 0.10), 8: (0.90, 0.05), 9: (1.00, 0.00)
     }
 
     @staticmethod
@@ -82,6 +89,8 @@ class FuzzyScale:
             params = (max(1, value - spread), value - spread/2, value + spread/2, value + spread)
         elif type_name == 'GFN':
             params = (value, value * (fuzziness / 10.0))
+        elif type_name == 'IFN':
+            params = FuzzyScale._IFN_SCALE[value]
         elif type_name == 'Crisp':
             params = (value,)
         else:
