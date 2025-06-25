@@ -41,6 +41,7 @@ class NumericType(Protocol):
     def from_crisp(value: float) -> 'NumericType': ...
     def defuzzify(self, method: str = 'centroid', **kwargs) -> float: ...
     def power(self, exponent: float) -> 'NumericType': ...
+    def alpha_cut(self, alpha: float) -> tuple[float, float]: ...
 
 
 # ==============================================================================
@@ -140,6 +141,10 @@ class Crisp:
             return float(item)
         else:
             raise TypeError(f"Cannot extract a crisp value from type {type(item)}")
+
+    def alpha_cut(self, alpha: float) -> tuple[float, float]:
+        # For a crisp number, the interval is just the number itself for any alpha > 0
+        return (self.value, self.value)
 
 
 @total_ordering
@@ -296,6 +301,12 @@ class TFN:
             return 1.0
         return (other.l - self.u) / denominator
 
+    def alpha_cut(self, alpha: float) -> tuple[float, float]:
+        if not (0 <= alpha <= 1): raise ValueError("Alpha must be between 0 and 1.")
+        lower = self.l + alpha * (self.m - self.l)
+        upper = self.u - alpha * (self.u - self.m)
+        return lower, upper
+
 
 @total_ordering
 class TrFN:
@@ -402,6 +413,13 @@ class TrFN:
 
     def power(self, exponent: float) -> TrFN:
         return self.__pow__(exponent)
+
+    def alpha_cut(self, alpha: float) -> tuple[float, float]:
+        if not (0 <= alpha <= 1): raise ValueError("Alpha must be between 0 and 1.")
+        # Similar logic for a trapezoid
+        lower = self.a + alpha * (self.b - self.a)
+        upper = self.d - alpha * (self.d - self.c)
+        return lower, upper
 
 
 @total_ordering
@@ -541,6 +559,8 @@ class IFN:
             raise ValueError("Crisp value for IFN conversion must be between 0 and 1.")
         return IFN(mu=value, nu=1.0 - value)
 
+    def alpha_cut(self, alpha: float): return NotImplemented
+
 
 @total_ordering
 class GFN:
@@ -651,6 +671,8 @@ class GFN:
     def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
         return Defuzzification.defuzzify(self, method, **kwargs)
 
+    def alpha_cut(self, alpha: float): return NotImplemented
+
 
 @total_ordering
 class IT2TrFN:
@@ -746,6 +768,8 @@ class IT2TrFN:
         """Creates a crisp IT2TrFN where UMF and LMF are identical crisp TrFNs."""
         crisp_trfn = TrFN.from_crisp(value)
         return IT2TrFN(umf=crisp_trfn, lmf=crisp_trfn)
+
+    def alpha_cut(self, alpha: float): return NotImplemented
 
 
 # ==============================================================================

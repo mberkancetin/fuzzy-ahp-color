@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 if TYPE_CHECKING:
-    from multiAHPy.types import NumericType, Number, TFN, Crisp
+    from multiAHPy.types import NumericType, Number, TFN, Crisp, IFN, IT2TrFN
 
 # ==============================================================================
 # 1. GENERIC & CLASSIC AHP ALGORITHMS
@@ -180,6 +180,59 @@ def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components:
 
     return fuzzy_weights
 
+def lambda_max_method(matrix: np.ndarray, number_type: Type[Number]) -> List[Number]:
+    """
+    Derives fuzzy weights using the Lambda-max method by Csutora and Buckley (2001).
+    This method fuzzifies Saaty's eigenvector method using alpha-cuts.
+
+    .. note::
+        **Academic Note:** This method directly extends the core concept of
+        classical AHP (finding the principal eigenvector) to the fuzzy domain.
+        It tends to produce fuzzy weights with less fuzziness (a smaller spread)
+        than the geometric mean method.
+    """
+    n = matrix.shape[0]
+
+    # Check if the number type supports alpha-cuts
+    if not hasattr(matrix[0,0], 'alpha_cut') or matrix[0,0].alpha_cut(0.5) is NotImplemented:
+        raise TypeError(f"Lambda-max method requires number types that support alpha-cuts (e.g., TFN, TrFN).")
+
+    # Step 1: Get the middle weights (alpha = 1.0)
+    # The alpha-cut at alpha=1 is just the middle point (m for TFN)
+    alpha_1_cut = np.array([[cell.alpha_cut(1.0)[0] for cell in row] for row in matrix])
+    # Wrap in Crisp objects to use our existing eigenvector method
+    crisp_matrix_m = np.array([[Crisp(val) for val in row] for row in alpha_1_cut], dtype=object)
+    weights_m_crisp = eigenvector_method(crisp_matrix_m, Crisp)
+    middle_weights = np.array([w.value for w in weights_m_crisp])
+
+    # Step 2: Get the lower bound weights (alpha = 0.0)
+    # The alpha-cut at alpha=0 is the full interval [l, u]
+    alpha_0_cut = np.array([[cell.alpha_cut(0.0) for cell in row] for row in matrix])
+    # We need the matrix of lower bounds
+    crisp_matrix_l = np.array([[interval[0] for interval in row] for row in alpha_0_cut])
+    crisp_matrix_l = np.array([[Crisp(val) for val in row] for row in crisp_matrix_l], dtype=object)
+    weights_l_crisp = eigenvector_method(crisp_matrix_l, Crisp)
+    lower_weights = np.array([w.value for w in weights_l_crisp])
+
+    # Step 3: Get the upper bound weights (alpha = 0.0)
+    crisp_matrix_u = np.array([[interval[1] for interval in row] for row in alpha_0_cut])
+    crisp_matrix_u = np.array([[Crisp(val) for val in row] for row in crisp_matrix_u], dtype=object)
+    weights_u_crisp = eigenvector_method(crisp_matrix_u, Crisp)
+    upper_weights = np.array([w.value for w in weights_u_crisp])
+
+    # Step 4: Construct the final fuzzy weights
+    fuzzy_weights = []
+    for i in range(n):
+        params = sorted([lower_weights[i], middle_weights[i], upper_weights[i]])
+        if number_type.__name__ == 'TFN':
+            fuzzy_weights.append(TFN(*params))
+        elif number_type.__name__ == 'TrFN':
+            # Convert a TFN-like result to a degenerate TrFN
+            from .types import TrFN
+            fuzzy_weights.append(TrFN(params[0], params[1], params[1], params[2]))
+        # ... and so on for other types if they support this method
+
+    return fuzzy_weights
 
 # ==============================================================================
 # 3. THE PRIMARY DISPATCHER FUNCTION
@@ -231,6 +284,8 @@ def derive_weights(
             return extent_analysis_method(matrix, number_type)
         elif method == 'llsm':
             weights =  fuzzy_llsm_method(matrix, number_type, components=['l', 'm', 'u'])
+        elif method == 'lambda_max':
+            weights = lambda_max_method(matrix, number_type)
         else:
             raise ValueError(f"Method '{method}' is not supported for TFN. Use 'geometric_mean', 'extent_analysis', or 'llsm'.")
 
@@ -241,6 +296,8 @@ def derive_weights(
             weights =  geometric_mean_method(matrix, number_type)
         elif method == 'llsm':
             weights =  fuzzy_llsm_method(matrix, number_type, components=['a', 'b', 'c', 'd'])
+        elif method == 'lambda_max':
+            weights = lambda_max_method(matrix, number_type)
         else:
             raise ValueError(f"Method '{method}' is not supported for TrFN. Use 'geometric_mean' or 'llsm'.")
 
@@ -251,6 +308,22 @@ def derive_weights(
             weights =  geometric_mean_method(matrix, number_type)
         else:
             raise ValueError(f"Method '{method}' is not supported for GFN. Currently only 'geometric_mean' is available.")
+
+    # --- Route to fuzzy methods for IT2TrFN type ---
+    elif type_name == 'IT2TrFN':
+        from .types import IT2TrFN
+        if method == 'geometric_mean':
+            weights =  geometric_mean_method(matrix, number_type)
+        else:
+            raise ValueError(f"Method '{method}' is not supported for IT2TrFN. Currently only 'geometric_mean' is available.")
+
+    # --- Route to fuzzy methods for IFN type ---
+    elif type_name == 'GFN':
+        from .types import IFN
+        if method == 'geometric_mean':
+            weights =  geometric_mean_method(matrix, number_type)
+        else:
+            raise ValueError(f"Method '{method}' is not supported for IFN. Currently only 'geometric_mean' is available.")
 
     else:
         raise TypeError(f"Weight derivation not implemented for number type: {type_name}")
