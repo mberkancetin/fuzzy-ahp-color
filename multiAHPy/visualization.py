@@ -32,35 +32,66 @@ def _check_pandas_availability():
     if not _PANDAS_AVAILABLE:
         raise ImportError("Excel/CSV export functionality requires the 'pandas' and 'openpyxl' libraries. "
                         "Please install them using: pip install pandas openpyxl")
-            
+
 # ==============================================================================
 # 1. HTML HIERARCHY DIAGRAM
 # ==============================================================================
 
-def _render_expandable_node(node: 'Node', is_alt: bool = False, alt_obj=None) -> str:
+from __future__ import annotations
+from typing import TYPE_CHECKING, Dict, Any
+import uuid
+
+if TYPE_CHECKING:
+    from .model import Hierarchy, Node
+    from .consistency import Consistency
+
+# ... (_get_nodes_by_level remains the same) ...
+
+# --- UPDATED RENDERER FUNCTION ---
+def _render_expandable_node(
+    node: Node,
+    consistency_data: Dict[str, Any] | None = None,
+    is_alt: bool = False,
+    alt_obj=None,
+    consistency_method: str = "centroid"
+) -> str:
     """
-    Renders a single, generic, expandable node box for any element in the hierarchy.
+    Renders a single, generic, expandable node box, now including consistency info.
     """
     body_id = 'node-body-' + str(uuid.uuid4())[:8]
 
     # --- Prepare details for the expandable body ---
     details_html = "<ul>"
-    if is_alt: # Alternative Node
-        score_str = f"{alt_obj.overall_score.defuzzify():.4f}" if alt_obj.overall_score else 'N/A'
-        details_html += f"<li><b>Final Score:</b> {score_str}</li>"
-        if alt_obj.performance_scores:
-            details_html += "<li><b>Performance Scores:</b><ul>"
-            for leaf_id, score in alt_obj.performance_scores.items():
-                details_html += f"<li>{leaf_id}: {score.defuzzify():.3f}</li>"
-            details_html += "</ul></li>"
-    else: # Hierarchy Node (Goal, Criterion, Sub-criterion)
-        local_w_str = f"{node.local_weight.defuzzify():.3f}" if node.local_weight else 'N/A'
-        global_w_str = f"{node.global_weight.defuzzify():.4f}" if node.global_weight else 'N/A'
+    if is_alt:
+        # ... (Alternative details logic is the same) ...
+    else: # Hierarchy Node
+        local_w_str = f"{node.local_weight.defuzzify(method=consistency_method):.3f}" if node.local_weight else 'N/A'
+        global_w_str = f"{node.global_weight.defuzzify(method=consistency_method):.4f}" if node.global_weight else 'N/A'
         parent_id_str = node.parent.id if node.parent else 'None'
         details_html += f"<li><b>Description:</b> {node.description or 'N/A'}</li>"
         details_html += f"<li><b>Parent:</b> {parent_id_str}</li>"
         details_html += f"<li><b>Local Weight:</b> {local_w_str}</li>"
         details_html += f"<li><b>Global Weight:</b> {global_w_str}</li>"
+
+        # --- NEW CONSISTENCY SECTION ---
+        # Check if consistency data exists for this specific node
+        if consistency_data and node.id in consistency_data:
+            cons_info = consistency_data[node.id]
+            cr_val = cons_info['saaty_cr']
+            gci_val = cons_info['gci']
+
+            # Use colors to indicate consistency status
+            cr_color = 'color: #2e7d32;' if cons_info.get('is_consistent_cr', True) else 'color: #c62828; font-weight: bold;'
+            gci_color = 'color: #2e7d32;' if cons_info.get('is_consistent_gci', True) else 'color: #c62828; font-weight: bold;'
+
+            details_html += "<li><b>Consistency:</b><ul>"
+            details_html += f"<li>Saaty's CR: <span style='{cr_color}'>{cr_val:.4f}</span></li>"
+            details_html += f"<li>GCI: <span style='{gci_color}'>{gci_val:.4f}</span></li>"
+            if "mikhailov_lambda" in cons_info and cons_info["mikhailov_lambda"] != "N/A":
+                details_html += f"<li>Mikhailov λ: {cons_info['mikhailov_lambda']}</li>"
+            details_html += "</ul></li>"
+        # --- END OF NEW SECTION ---
+
     details_html += "</ul>"
 
     header_text = alt_obj.name if is_alt else node.id
@@ -74,28 +105,31 @@ def _render_expandable_node(node: 'Node', is_alt: bool = False, alt_obj=None) ->
     </div>
     """
 
-def _render_criterion_tree(node: 'Node') -> str:
-    """Renders the tree for a single criterion and its children."""
+def _render_criterion_tree(node: 'Node', consistency_data: Dict[str, Any]) -> str:
+    """Renders the tree for a single criterion, passing consistency data down."""
     if node.is_leaf:
-        return _render_expandable_node(node)
+        return _render_expandable_node(node, consistency_data)
 
-    parent_html = f'<div class="tree-parent">{_render_expandable_node(node)}</div>'
-    children_html = "".join([_render_expandable_node(child) for child in node.children])
+    parent_html = f'<div class="tree-parent">{_render_expandable_node(node, consistency_data)}</div>'
+    children_html = "".join([_render_expandable_node(child, consistency_data) for child in node.children])
     children_container_html = f'<div class="tree-children">{children_html}</div>'
 
     return f'<div class="criterion-tree-block">{parent_html}{children_container_html}</div>'
 
-def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None):
+def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None, consistency_method: str = "centroid"):
     """
     Generates and displays/saves a static, tree-diagram-style HTML representation
     of the AHP hierarchy, matching the final photoshopped layout.
     """
     from IPython.display import display, HTML
+    from .consistency import Consistency
 
-    # Ensure weights are calculated
-    if not all(c.global_weight is not None for c in model.root.children):
-        try: model.calculate_weights()
-        except Exception as e: print(f"Warning: Could not auto-calculate weights for display. Run model.calculate_weights() first. Error: {e}")
+    try:
+        if model.root.global_weight is None: model.calculate_weights()
+    except Exception as e: print(f"Warning: Could not auto-calculate weights for display. Error: {e}")
+
+    # Calculate consistency for the entire model beforehand
+    consistency_results = Consistency.check_model_consistency(model)
 
     # --- CSS AND JAVASCRIPT ---
     css_js = """
@@ -191,13 +225,13 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None):
     <div class="ahp-stage">
         <div class="ahp-stage-title">Goal</div>
         <div style="display: flex; justify-content: center;">
-            {_render_expandable_node(model.root)}
+            {_render_expandable_node(model.root, consistency_results)}
         </div>
     </div>
     """
 
-    # 2. Criteria Stage (Horizontal layout of vertical trees)
-    criteria_trees_html = "".join([_render_criterion_tree(crit_node) for crit_node in model.root.children])
+    # 2. Criteria Stage
+    criteria_trees_html = "".join([_render_criterion_tree(crit_node, consistency_results) for crit_node in model.root.children])
     criteria_html = f"""
     <div class="ahp-stage">
         <div class="ahp-stage-title">Criteria & Sub-Criteria</div>
@@ -211,7 +245,7 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None):
     alternatives_html = ""
     if model.alternatives:
         # Sort alternatives by score before displaying
-        ranked_alts = sorted(model.alternatives, key=lambda alt: alt.overall_score.defuzzify() if alt.overall_score else -1, reverse=True)
+        ranked_alts = sorted(model.alternatives, key=lambda alt: alt.overall_score.defuzzify(method=consistency_method) if alt.overall_score else -1, reverse=True)
         alt_html_parts = [_render_expandable_node(None, is_alt=True, alt_obj=alt) for alt in ranked_alts]
 
         alternatives_html = f"""
@@ -513,7 +547,7 @@ def generate_matrix_report(
     crisp_weights = results["crisp_weights"]
 
     # Get consistency metrics
-    cr = Consistency.calculate_consistency_ratio(matrix, defuzzify_method=consistency_method)
+    cr = Consistency.calculate_saaty_cr(matrix, consistency_method=consistency_method)
     # To get CI and RI, we can re-calculate parts of the CR logic
     ci = 0.0
     ri = 0.0
@@ -561,7 +595,7 @@ def generate_matrix_report(
     if min_degrees is not None:
         # Degrees of Probability Min Values Normalized are the final crisp weights
         report_lines.append(f"Degrees of Probability Min Values Normalized: [{weights_str}]")
-    
+
     V_matrix = results.get("possibility_matrix")
     if V_matrix is not None:
         report_lines.append("\n--- Degrees of Probability Matrix (V) ---\n")
@@ -576,7 +610,7 @@ def generate_matrix_report(
 
     # 4. Consistency Metrics
     report_lines.append(f"CR, CI, RI: ({cr:.6f}, {ci:.6f}, {ri:.2f})")
-    
+
     return "\n".join(report_lines)
 
 def generate_full_report(
@@ -687,10 +721,22 @@ def _create_report_dataframe(
     # --- Step 1: Perform ALL calculations first ---
     results = derive_weights(matrix, model.number_type, derivation_method)
     crisp_weights = results["crisp_weights"]
-    
-    ci, ri, cr = 0.0, 0.0, 0.0
+
+    # Calculate all consistency metrics
+    gci = Consistency.calculate_gci(matrix, consistency_method=consistency_method)
+
+    # Mikhailov's Lambda is specific to TFNs and fuzzy programming
+    mikhailov_lambda = "N/A"
+    if isinstance(matrix[0,0], TFN):
+        try:
+            lambda_results = Consistency.calculate_mikhailov_lambda(matrix, TFN)
+            mikhailov_lambda = f"{lambda_results:.4f}" if lambda_results != -1.0 else "Opt. Failed"
+        except ImportError:
+            mikhailov_lambda = "SciPy not installed"
+
+    ci, ri, saaty_cr = 0.0, 0.0, 0.0
     if n > 2:
-        cr = Consistency.calculate_consistency_ratio(matrix, defuzzify_method=consistency_method)
+        saaty_cr = Consistency.calculate_saaty_cr(matrix, consistency_method=consistency_method)
         crisp_matrix_for_eig = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
         try:
             lambda_max = np.max(np.real(np.linalg.eig(crisp_matrix_for_eig)[0]))
@@ -700,21 +746,25 @@ def _create_report_dataframe(
         ri = Consistency._get_random_index(n)
 
     # --- Step 2: Build the report content as strings ---
-    
+
     # 1. Main Matrix Data
     matrix_data_as_strings = []
     for i in range(n):
         row_data = {}
         for j in range(n):
             cell = matrix[i, j]
-            if isinstance(getattr(cell, 'l', None), float):
+            if hasattr(cell, 'l'): # TFN-like
                  row_data[items[j]] = f"({cell.l:.3f}, {cell.m:.3f}, {cell.u:.3f})"
-            elif isinstance(getattr(cell, 'value', None), float):
+            elif hasattr(cell, 'a'): # TrFN-like
+                 row_data[items[j]] = f"({cell.a:.3f}, {cell.b:.3f}, {cell.c:.3f}, {cell.d:.3f})"
+            elif hasattr(cell, 'mu'): # IFN-like
+                 row_data[items[j]] = f"(μ:{cell.mu:.3f}, ν:{cell.nu:.3f})"
+            elif hasattr(cell, 'value'): # Crisp-like
                  row_data[items[j]] = f"{cell.value:.3f}"
-            else:
-                 row_data[items[j]] = f"{cell.defuzzify():.3f}"
+            else: # Fallback
+                 row_data[items[j]] = str(cell)
         matrix_data_as_strings.append(row_data)
-        
+
     report_df = pd.DataFrame(matrix_data_as_strings, index=items)
 
     # 2. Add summary stats as new rows
@@ -730,10 +780,17 @@ def _create_report_dataframe(
     # Add Consistency rows
     # For these, we create a row with a descriptive index and put the value in the first column
     cons_data = {
-        'Consistency Ratio': f"{cr:.4f}",
+        'Saaty CR': f"{saaty_cr:.4f} (Threshold: {0.1})",
         'Consistency Index': f"{ci:.4f}",
-        'Random Index': f"{ri:.2f}"
+        'Random Index': f"{ri:.2f}",
+        'Geometric Consistency Index (GCI)': f"{gci:.4f} (Threshold: {Consistency._get_gci_threshold(n)})",
+        "Mikhailov's Lambda (TFN only)": mikhailov_lambda,
     }
+
+    # Create a DataFrame for the consistency metrics
+    cons_df = pd.DataFrame.from_dict(cons_data, orient='index', columns=['Value'])
+    cons_df.index.name = "Consistency Metrics"
+
     for desc, val in cons_data.items():
         # Create a row with NaN for all columns except the first one
         row_content = {col: '' for col in items}
@@ -741,7 +798,7 @@ def _create_report_dataframe(
         row = pd.DataFrame(row_content, index=[desc])
         report_df = pd.concat([report_df, row])
 
-    return report_df
+    return report_df, cons_df
 
 def _export_to_excel(model, filename, derivation_method, consistency_method):
     if not filename.endswith('.xlsx'):
@@ -750,7 +807,7 @@ def _export_to_excel(model, filename, derivation_method, consistency_method):
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:
             def _traverse_and_write(node: Node):
                 if not node.is_leaf and node.comparison_matrix is not None:
-                    df_report = _create_report_dataframe(node, model, derivation_method, consistency_method)
+                    df_report, df_matrices = _create_report_dataframe(node, model, derivation_method, consistency_method)
                     sheet_name = node.id.replace(':', '').replace('\\', '').replace('/', '')[:31]
                     df_report.to_excel(writer, sheet_name=sheet_name)
                 for child in node.children:
@@ -765,7 +822,7 @@ def _export_to_csv(model, filename, derivation_method, consistency_method):
     try:
         def _traverse_and_write_csv(node: Node):
             if not node.is_leaf and node.comparison_matrix is not None:
-                df_report = _create_report_dataframe(node, model, derivation_method, consistency_method)
+                df_report, df_matrices = _create_report_dataframe(node, model, derivation_method, consistency_method)
                 csv_filename = f"{base_filename}_matrix_{node.id}.csv"
                 df_report.to_csv(csv_filename)
                 print(f"  - Saved {csv_filename}")
@@ -829,7 +886,7 @@ def _export_to_gsheet(
             except gspread.exceptions.SpreadsheetNotFound:
                 print(f"❌ Error: Spreadsheet with ID '{name_or_id}' not found.")
                 return
-        
+
         if not spreadsheet:
             return
 
@@ -838,11 +895,11 @@ def _export_to_gsheet(
             """A nested helper function to recursively upload data."""
             if not node.is_leaf and node.comparison_matrix is not None:
                 # Create a DataFrame for this node's matrix report
-                df_report = _create_report_dataframe(node, model, derivation_method, consistency_method)
-                
+                df_report, df_matrices = _create_report_dataframe(node, model, derivation_method, consistency_method)
+
                 # Sanitize sheet name
                 sheet_name = node.id.replace(':', '').replace('\\', '').replace('/', '')[:31]
-                
+
                 if first_sheet and spreadsheet.worksheet("TempSheet"):
                     # Use and rename the first default sheet
                     worksheet = spreadsheet.sheet1
@@ -850,7 +907,7 @@ def _export_to_gsheet(
                 else:
                     # Create a new sheet
                     worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=100, cols=20)
-                
+
                 # Use gspread-dataframe to upload the DataFrame
                 set_with_dataframe(worksheet, df_report, include_index=True)
                 print(f"    - Uploaded report for '{node.id}' to sheet '{sheet_name}'.")
@@ -859,11 +916,11 @@ def _export_to_gsheet(
             for child in node.children:
                 # Pass the updated 'first_sheet' status down the recursion
                 first_sheet = _traverse_and_upload(child, first_sheet)
-                
+
             return first_sheet # Return the final status
-        
+
         _traverse_and_upload(model.root)
-        
+
         # Clean up by deleting the temporary sheet if it still exists
         try:
             temp_sheet = spreadsheet.worksheet("TempSheet")
@@ -873,7 +930,7 @@ def _export_to_gsheet(
 
         print(f"\n✅ Google Sheets report complete!")
         print(f"   URL: {spreadsheet.url}")
-        
+
     except Exception as e:
         print(f"\n❌ An error occurred during Google Sheets export: {e}")
         print("   Please ensure you are running in a Google Colab environment and have granted permissions.")

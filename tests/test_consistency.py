@@ -77,13 +77,13 @@ def test_get_random_index():
 
 def test_cr_for_perfectly_consistent_matrix(perfectly_consistent_crisp_matrix: np.ndarray):
     """A perfectly consistent matrix must have a CR of approximately 0."""
-    cr = Consistency.calculate_consistency_ratio(perfectly_consistent_crisp_matrix)
+    cr = Consistency.calculate_saaty_cr(perfectly_consistent_crisp_matrix)
     assert cr == pytest.approx(0.0, abs=1e-9)
 
 def test_cr_for_2x2_matrix():
     """Any 2x2 reciprocal matrix is always perfectly consistent (CR=0)."""
     matrix_2x2 = np.array([[Crisp(1), Crisp(5)], [Crisp(0.2), Crisp(1)]], dtype=object)
-    cr = Consistency.calculate_consistency_ratio(matrix_2x2)
+    cr = Consistency.calculate_saaty_cr(matrix_2x2)
     assert cr == 0.0
 
 def test_cr_for_saaty_inconsistent_example(saaty_inconsistent_crisp_matrix: np.ndarray):
@@ -92,12 +92,12 @@ def test_cr_for_saaty_inconsistent_example(saaty_inconsistent_crisp_matrix: np.n
     geometric mean weight approximation for lambda_max.
     For this specific matrix and method, CR should be ~0.035.
     """
-    cr = Consistency.calculate_consistency_ratio(saaty_inconsistent_crisp_matrix)
+    cr = Consistency.calculate_saaty_cr(saaty_inconsistent_crisp_matrix)
     assert cr == pytest.approx(0.03547, abs=1e-4)
 
 def test_cr_for_very_inconsistent_tfn_matrix(very_inconsistent_tfn_matrix: np.ndarray):
     """Test that a clearly inconsistent TFN matrix yields a high CR."""
-    cr = Consistency.calculate_consistency_ratio(very_inconsistent_tfn_matrix, defuzzify_method='centroid')
+    cr = Consistency.calculate_saaty_cr(very_inconsistent_tfn_matrix, consistency_method='centroid')
     # For a 3x3 matrix, CR > 0.05 is inconsistent, and this one should be much higher.
     assert cr > 0.1
 
@@ -119,14 +119,14 @@ def test_check_model_consistency(inconsistent_model: Hierarchy):
     Tests the main function that checks all matrices in a model.
     It should correctly identify the inconsistent matrix.
     """
-    results = Consistency.check_model_consistency(inconsistent_model, threshold=0.1)
+    results = Consistency.check_model_consistency(inconsistent_model, saaty_cr_threshold=0.1)
 
     assert "Goal" in results
     goal_results = results["Goal"]
 
     # More Pythonic assertions
     assert not goal_results["is_consistent"]  # Instead of == False
-    assert goal_results["consistency_ratio"] > 0.1
+    assert goal_results["saaty_cr"] > 0.1
     assert goal_results["matrix_size"] == 3
 
 def test_cr_for_saaty_inconsistent_example():
@@ -141,7 +141,7 @@ def test_cr_for_saaty_inconsistent_example():
     # The bug was in my expected value, not your code.
     expected_cr = 0.03547
 
-    cr = Consistency.calculate_consistency_ratio(matrix)
+    cr = Consistency.calculate_saaty_cr(matrix)
     assert cr == pytest.approx(expected_cr, abs=1e-4)
 
 def test_check_model_with_inconsistent_matrix():
@@ -161,7 +161,7 @@ def test_check_model_with_inconsistent_matrix():
         goal_node.add_child(Node(name))
     model.set_comparison_matrix("Goal", inconsistent_matrix)
 
-    results = Consistency.check_model_consistency(model, threshold=0.1)
+    results = Consistency.check_model_consistency(model, saaty_cr_threshold=0.1)
 
     assert results["Goal"]["is_consistent"] == False
 
@@ -182,13 +182,13 @@ def test_check_model_with_consistent_matrix():
         goal_node.add_child(Node(name))
     model.set_comparison_matrix("Goal", consistent_matrix)
 
-    results = Consistency.check_model_consistency(model, threshold=0.1)
+    results = Consistency.check_model_consistency(model, saaty_cr_threshold=0.1)
 
     # More robust assertions
     assert "Goal" in results
     assert "is_consistent" in results["Goal"]
     assert results["Goal"]["is_consistent"] == True
-    assert results["Goal"]["consistency_ratio"] < 0.1
+    assert results["Goal"]["saaty_cr"] < 0.1
 
 def test_cr_saaty_actual_example():
     """
@@ -200,7 +200,7 @@ def test_cr_saaty_actual_example():
         [Crisp(2), Crisp(1/3), Crisp(1)]
     ], dtype=object)
 
-    cr = Consistency.calculate_consistency_ratio(saaty_matrix)
+    cr = Consistency.calculate_saaty_cr(saaty_matrix)
     print(f"CR: {cr}")
     expected_cr = 0.01759106470156774
     assert abs(cr - expected_cr) < 1e-3
@@ -216,7 +216,7 @@ def test_cr_for_saaty_example1():
         [Crisp(1/7), Crisp(1/9), Crisp(1)]
     ], dtype=object)
 
-    cr = Consistency.calculate_consistency_ratio(saaty_inconsistent_crisp_matrix)
+    cr = Consistency.calculate_saaty_cr(saaty_inconsistent_crisp_matrix)
     # This should give CR > 0.1
     assert cr > 0.1
 
@@ -231,7 +231,7 @@ def test_cr_for_consistent_example2():
         [Crisp(1/4), Crisp(1/9), Crisp(1)]
     ], dtype=object)
 
-    cr = Consistency.calculate_consistency_ratio(consistent_crisp_matrix)
+    cr = Consistency.calculate_saaty_cr(consistent_crisp_matrix)
     # This matrix is actually consistent with CR ≈ 0.035
     assert cr == pytest.approx(0.035, abs=0.01)
     assert cr < 0.1  # Should be consistent
@@ -272,7 +272,7 @@ def test_manual_verification():
     print(f"Manual CR: {cr_manual}")
 
     # Compare with your function
-    cr_function = Consistency.calculate_consistency_ratio(matrix)
+    cr_function = Consistency.calculate_saaty_cr(matrix)
     print(f"Function CR: {cr_function}")
 
     assert abs(cr_manual - cr_function) < 0.001

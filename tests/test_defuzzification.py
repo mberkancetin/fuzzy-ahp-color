@@ -13,7 +13,7 @@ import numpy as np
 
 # Import the code to be tested
 from multiAHPy.defuzzification import Defuzzification
-from multiAHPy.types import Crisp, TFN, TrFN, GFN
+from multiAHPy.types import Crisp, TFN, TrFN, GFN, IT2TrFN, IFN
 
 # --- Test Data Fixtures ---
 
@@ -112,3 +112,19 @@ def test_unsupported_method(sample_tfn):
     """Test that an unsupported method name raises a ValueError."""
     with pytest.raises(ValueError, match="Method 'invalid_method' not implemented for TFN"):
         Defuzzification.defuzzify(sample_tfn, method='invalid_method')
+
+
+def test_ifn_entropy_defuzzification():
+    """Test the entropy measure for IFNs."""
+    # A crisp-like IFN (no fuzziness)
+    crisp_ifn = IFN(1.0, 0.0)
+    assert Defuzzification.defuzzify(crisp_ifn, method='entropy') == pytest.approx(0.0)
+
+    # A maximally fuzzy IFN (high hesitation)
+    max_hesitation_ifn = IFN(0.0, 0.0)
+    assert Defuzzification.defuzzify(max_hesitation_ifn, method='entropy') == pytest.approx(1.0)
+
+    # A standard IFN from the fixture
+    standard_ifn = IFN(0.6, 0.3) # score = 0.3
+    # Expected entropy = 1 - |0.6 - 0.3| = 0.7
+    assert Defuzzification.defuzzify(standard_ifn, method='entropy') == pytest.approx(0.7)

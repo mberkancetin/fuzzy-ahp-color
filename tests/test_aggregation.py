@@ -14,7 +14,7 @@ import pytest
 import numpy as np
 
 # Import the code to be tested
-from multiAHPy.aggregation import aggregate_matrices
+from multiAHPy.aggregation import aggregate_matrices, aggregate_priorities
 from multiAHPy.types import TFN, Crisp
 
 # --- Test Fixtures: Reusable test data ---
@@ -151,3 +151,26 @@ def test_aggregation_with_mismatched_shapes(sample_crisp_matrices):
     mismatched_list = [sample_crisp_matrices[0], np.eye(3)]
     with pytest.raises(ValueError, match="All matrices must have the same dimensions"):
         aggregate_matrices(mismatched_list)
+
+def test_aggregate_priorities(sample_crisp_matrices):
+    """Test the aggregation of priorities workflow."""
+    # sample_crisp_matrices contains two matrices
+
+    # Manually calculate weights for each matrix first
+    # For matrix 1: [[1,4],[0.25,1]], weights are [0.8, 0.2]
+    # For matrix 2: [[1,2],[0.5,1]], weights are [0.667, 0.333]
+
+    # Test with equal expert weights
+    result_equal = aggregate_priorities(sample_crisp_matrices, derivation_method='geometric_mean')
+    expected_equal = np.average([[0.8, 0.2], [2/3, 1/3]], axis=0)
+    assert result_equal == pytest.approx(expected_equal, abs=1e-3)
+
+    # Test with unequal expert weights
+    expert_weights = [0.25, 0.75] # Expert 2 is 3x more important
+    result_weighted = aggregate_priorities(
+        sample_crisp_matrices,
+        derivation_method='geometric_mean',
+        expert_weights=expert_weights
+    )
+    expected_weighted = np.average([[0.8, 0.2], [2/3, 1/3]], axis=0, weights=expert_weights)
+    assert result_weighted == pytest.approx(expected_weighted, abs=1e-3)

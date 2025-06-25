@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from multiAHPy.types import TFN, TrFN, Crisp, GFN, NumericType, Number
+    from multiAHPy.types import TFN, TrFN, IFN, IT2TrFN, Crisp, GFN, NumericType, Number
 
 
 def centroid_method(fuzzy_number: TFN) -> float:
@@ -35,6 +35,11 @@ def graded_mean_integration(fuzzy_number: TFN) -> float:
     """
     Defuzzify a triangular fuzzy number using the graded mean integration method.
     This method gives more weight to the middle value compared to the lower and upper bounds.
+
+    .. note::
+            For TFNs, 'graded_mean' (l+4m+u)/6 is often preferred as it is a
+            well-regarded method (e.g., Yager's approach) that considers all
+            points of the fuzzy number. 'centroid' (l+m+u)/3 is simpler.
 
     Parameters:
     -----------
@@ -169,7 +174,7 @@ class Defuzzification:
         Parameters:
         -----------
         fuzzy_number : NumericType
-            The fuzzy or crisp number (TFN, TrFN, Crisp).
+            The fuzzy or crisp number (TFN, TrFN, GFN, IFN, IT2TrFN, Crisp).
         method : str
             Defuzzification method to use
         **kwargs : dict
@@ -180,7 +185,7 @@ class Defuzzification:
         float
             The defuzzified value
         """
-        from .types import TFN, TrFN, GFN, Crisp
+        from .types import TFN, TrFN, GFN, IFN, Crisp, IT2TrFN
         if isinstance(fuzzy_number, TFN):
             if method == "centroid":
                 return centroid_method(fuzzy_number)
@@ -212,6 +217,58 @@ class Defuzzification:
                 return fuzzy_number.m - 3 * fuzzy_number.sigma
             else:
                 raise ValueError(f"Method '{method}' not implemented for GFN.")
+        elif isinstance(fuzzy_number, IFN):
+            # --- Academic Note on IFN Defuzzification ---
+            # Defuzzification of IFNs aims to convert the (μ, ν) pair into a single
+            # crisp value for ranking. Different methods exist based on how the
+            # hesitation degree (π = 1 - μ - ν) is handled.
+
+            if method == "score" or method == "centroid":
+                """
+                Calculates the Score Function (S = μ - ν). This is the most common
+                method for ranking IFNs. It represents the net degree of membership
+                over non-membership. A value of 1 is best, -1 is worst.
+                """
+                return fuzzy_number.mu - fuzzy_number.nu
+
+            elif method == "value":
+                """
+                Calculates a value by considering the hesitation degree (π) as potential
+                membership, distributed proportionally to the existing membership (μ).
+                Formula: V = μ + π*μ. This can be seen as a slightly more optimistic
+                measure than the simple score function.
+                """
+                return fuzzy_number.mu + (fuzzy_number.pi * fuzzy_number.mu)
+
+            elif method == "entropy":
+                """
+                Calculates the Intuitionistic Fuzzy Entropy. This does not represent
+                the value of the number, but its degree of fuzziness or uncertainty.
+                A score of 0 means no fuzziness (crisp), 1 means maximum fuzziness.
+                Based on Burillo and Bustince (1996).
+                """
+                return 1.0 - abs(fuzzy_number.mu - fuzzy_number.nu)
+
+            elif method == "accuracy":
+                """
+                Calculates the Accuracy Function (H = μ + ν). This value represents the
+                degree of certainty or information about the judgment. It is typically
+                not used for primary ranking, but as a tie-breaker when two IFNs have
+                the same score.
+                """
+                return fuzzy_number.mu + fuzzy_number.nu
+
+            else:
+                raise ValueError(f"Unsupported defuzzification method '{method}' for IFN. "
+                                "Available methods: 'score', 'centroid', 'value', 'entropy', 'accuracy'.")
+        elif isinstance(fuzzy_number, IT2TrFN):
+            # Use a default method name if 'centroid' is passed, as it's ambiguous
+            if method == 'centroid_average' or method == 'centroid':
+                centroid_umf = fuzzy_number.umf.defuzzify(method='centroid')
+                centroid_lmf = fuzzy_number.lmf.defuzzify(method='centroid')
+                return (centroid_umf + centroid_lmf) / 2.0
+            else:
+                raise ValueError(f"Unsupported defuzzification method '{method}' for IT2TrFN.")
         elif isinstance(fuzzy_number, Crisp):
             return fuzzy_number.value
         # Fallback for other potential types

@@ -19,7 +19,10 @@ from multiAHPy.matrix_builder import create_matrix_from_judgments
 
 @pytest.fixture
 def sample_tfn_model() -> Hierarchy:
-    """Provides a basic but complete 2-level TFN model for testing."""
+    """
+    Provides a basic but complete 2-level TFN model, now correctly set up
+    for the AHP synthesis calculation.
+    """
     # Define structure
     criteria = ["Cost", "Quality"]
     sub_criteria_cost = ["Purchase Price", "Maintenance"]
@@ -42,26 +45,31 @@ def sample_tfn_model() -> Hierarchy:
     model.add_alternative("Option A")
     model.add_alternative("Option B")
 
-    # Set matrices
-    # Goal vs Criteria
+    # Set criteria/sub-criteria comparison matrices
     crit_judgments = {("Cost", "Quality"): 2}
     crit_matrix = create_matrix_from_judgments(crit_judgments, criteria, TFN)
     model.set_comparison_matrix("Goal", crit_matrix)
 
-    # Cost vs its Sub-criteria
     sub_crit_judgments = {("Purchase Price", "Maintenance"): 3}
     sub_crit_matrix = create_matrix_from_judgments(sub_crit_judgments, sub_criteria_cost, TFN)
     model.set_comparison_matrix("Cost", sub_crit_matrix)
+    
+    # Judgments for alternatives under each leaf criterion
+    alt_vs_purchase_price = {("Option A", "Option B"): 1/4} # Option B is better on price
+    alt_vs_maintenance = {("Option A", "Option B"): 1/2} # Option B is better on maintenance
+    alt_vs_quality = {("Option A", "Option B"): 5}   # Option A is much better on quality
 
-    # Set performance scores (leaf nodes are 'Purchase Price', 'Maintenance', 'Quality')
-    for alt_name in alternatives:
-        alt = model.get_alternative(alt_name)
-        alt.set_performance_score("Purchase Price", TFN(0.6, 0.7, 0.8))
-        alt.set_performance_score("Maintenance", TFN(0.3, 0.4, 0.5))
-        alt.set_performance_score("Quality", TFN(0.8, 0.9, 1.0))
+    # Create and set each matrix
+    matrix_price = create_matrix_from_judgments(alt_vs_purchase_price, alternatives, TFN)
+    model.set_alternative_matrix("Purchase Price", matrix_price)
+
+    matrix_maint = create_matrix_from_judgments(alt_vs_maintenance, alternatives, TFN)
+    model.set_alternative_matrix("Maintenance", matrix_maint)
+
+    matrix_qual = create_matrix_from_judgments(alt_vs_quality, alternatives, TFN)
+    model.set_alternative_matrix("Quality", matrix_qual)
 
     return model
-
 # --- Tests for Node Class ---
 
 def test_node_creation_and_parenting():
@@ -149,16 +157,12 @@ def test_calculate_alternative_scores(sample_tfn_model):
     alt_a = sample_tfn_model.get_alternative("Option A")
     assert alt_a.overall_score is None
 
-    # Run score calculation
+    # Run score calculation (this is the method being tested)
     sample_tfn_model.calculate_alternative_scores()
 
     # After calculation, scores should be populated
     assert isinstance(alt_a.overall_score, TFN)
-    assert alt_a.overall_score.m > 0 # Should be a positive score
-
-    # Check that intermediate node scores were also calculated
-    assert "Cost" in alt_a.node_scores
-    assert isinstance(alt_a.node_scores["Cost"], TFN)
+    assert alt_a.overall_score.m > 0
 
 def test_get_rankings(sample_tfn_model):
     """Test that get_rankings produces a sorted list of tuples."""

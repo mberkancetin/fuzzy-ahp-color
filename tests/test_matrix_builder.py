@@ -26,14 +26,11 @@ from multiAHPy.types import TFN, TrFN, GFN, Crisp
 def test_fuzzyscale_tfn_conversion():
     """Test conversion of a crisp Saaty value to a TFN."""
     # Test a standard value
-    tfn = FuzzyScale.get_fuzzy_number(3, TFN, fuzziness=1.0)
-    assert isinstance(tfn, TFN)
-    assert tfn.l == 2
-    assert tfn.m == 3
-    assert tfn.u == 4
+    tfn = FuzzyScale.get_fuzzy_number(3, TFN, scale='linear')
+    assert tfn == TFN(2, 3, 4)
 
-    # Test reciprocal value
-    reciprocal_tfn = FuzzyScale.get_fuzzy_number(-3, TFN, fuzziness=1.0)
+    # Test reciprocal value using fractions, not negative numbers
+    reciprocal_tfn = FuzzyScale.get_fuzzy_number(1/3, TFN, scale='linear')
     expected_inverse = tfn.inverse()
     assert reciprocal_tfn == expected_inverse
 
@@ -65,17 +62,19 @@ def test_fuzzyscale_crisp_conversion():
 
 def test_fuzzyscale_invalid_input():
     """Test that invalid Saaty values raise a ValueError."""
-    with pytest.raises(ValueError, match="Crisp judgment value must be an integer"):
+    with pytest.raises(ValueError, match="Judgment value .* must correspond to a Saaty scale value of 1-9"):
         FuzzyScale.get_fuzzy_number(10, TFN) # Value > 9
-    with pytest.raises(ValueError):
+
+    with pytest.raises(ValueError, match="Judgment value .* must correspond to a Saaty scale value of 1-9"):
         FuzzyScale.get_fuzzy_number(0, TFN) # Value is 0
 
 # --- Tests for Matrix Creation Functions ---
 
 def test_create_matrix_from_list():
     """Test creating a 3x3 TFN matrix from a flat list of judgments."""
-    judgments = [3, 5, 2] # C1/C2=3, C1/C3=5, C2/C3=2
-    matrix = create_matrix_from_list(judgments, TFN)
+    # C1/C2=3, C1/C3=5, C2/C3=1/2 (i.e., C3 is moderately more important than C2)
+    judgments = [3, 5, 1/2]
+    matrix = create_matrix_from_list(judgments, TFN, scale='linear')
 
     # Check shape and type
     assert matrix.shape == (3, 3)
@@ -85,9 +84,10 @@ def test_create_matrix_from_list():
     assert matrix[0, 0] == TFN(1, 1, 1)
 
     # Check a value and its reciprocal
-    assert matrix[0, 1] == FuzzyScale.get_fuzzy_number(3, TFN)
-    assert matrix[1, 0] == FuzzyScale.get_fuzzy_number(-3, TFN)
-
+    assert matrix[0, 1] == FuzzyScale.get_fuzzy_number(3, TFN, scale='linear')
+    assert matrix[1, 0] == FuzzyScale.get_fuzzy_number(1/3, TFN, scale='linear')
+    assert matrix[2, 1] == FuzzyScale.get_fuzzy_number(2, TFN, scale='linear')
+    
 def test_create_matrix_from_list_invalid_length():
     """Test that a list with an invalid number of judgments raises an error."""
     invalid_judgments = [3, 5, 2, 4] # 4 judgments cannot form a square matrix
