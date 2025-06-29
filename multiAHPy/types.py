@@ -1,13 +1,13 @@
 from __future__ import annotations
 import numpy as np
-from typing import Protocol, TypeVar, Union, Any
+from typing import Protocol, TypeVar, Union, Any, Dict, List, Callable, runtime_checkable
 from functools import total_ordering
-from .defuzzification import Defuzzification
 
 # ==============================================================================
 # 1. THE PROTOCOL BLUEPRINT
 # ==============================================================================
 
+@runtime_checkable
 class NumericType(Protocol):
     """
     A protocol defining the interface for any numeric type used in the AHP library.
@@ -39,10 +39,13 @@ class NumericType(Protocol):
     def multiplicative_identity() -> 'NumericType': ...
     @staticmethod
     def from_crisp(value: float) -> 'NumericType': ...
-    def defuzzify(self, method: str = 'centroid', **kwargs) -> float: ...
     def power(self, exponent: float) -> 'NumericType': ...
     def alpha_cut(self, alpha: float) -> tuple[float, float]: ...
-
+    def defuzzify(self, method: str = 'centroid', **kwargs) -> float: ...
+    @classmethod
+    def get_available_defuzzify_methods(cls) -> List[str]: ...
+    @classmethod
+    def register_defuzzify_method(cls, name: str, func: Callable): ...
 
 # ==============================================================================
 # 2. IMPLEMENTATIONS OF THE PROTOCOL
@@ -53,6 +56,7 @@ class Crisp:
     """
     A wrapper for float to make it conform to the NumericType protocol.
     """
+    _defuzzify_methods: Dict[str, Callable] = {}
 
     def __init__(self, value: float):
         """
@@ -125,9 +129,6 @@ class Crisp:
     def from_crisp(value: float) -> Crisp:
         return Crisp(value)
 
-    def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
-        return Defuzzification.defuzzify(self, method, **kwargs)
-
     def power(self, exponent: float) -> Crisp:
         return self.__pow__(exponent)
 
@@ -146,6 +147,25 @@ class Crisp:
         # For a crisp number, the interval is just the number itself for any alpha > 0
         return (self.value, self.value)
 
+    def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
+        func = Crisp._defuzzify_methods.get(method)
+        if func is None:
+            fixed_func = lambda _: self.value
+            self.register_defuzzify_method(name=method, func=fixed_func)
+            func = Crisp._defuzzify_methods.get(method)
+        return func(self, **kwargs)
+
+    @classmethod
+    def get_available_defuzzify_methods(cls) -> List[str]:
+        return list(cls._defuzzify_methods.keys())
+
+    @classmethod
+    def register_defuzzify_method(cls, name: str, func: Callable):
+        """Registers a new defuzzification function for this number type."""
+        if name in cls._defuzzify_methods:
+            print(f"Warning: Overwriting defuzzify method '{name}' for {cls.__name__}")
+        cls._defuzzify_methods[name] = func
+
 
 @total_ordering
 class TFN:
@@ -154,6 +174,7 @@ class TFN:
     A TFN is represented as (l, m, u) where l ≤ m ≤ u.
     l: lower bound, m: middle value, u: upper bound
     """
+    _defuzzify_methods: Dict[str, Callable] = {}
 
     def __init__(self, l, m, u):
         """Initialize a triangular fuzzy number."""
@@ -279,20 +300,6 @@ class TFN:
 
         return np.sqrt((d_l + d_m + d_u) / 3.0)
 
-    # Additional methods as needed
-    def defuzzify(self, method: str = 'graded_mean', **kwargs) -> float:
-        """
-        Delegates defuzzification to the external Defuzzification class.
-        This keeps the data object (TFN) separate from the algorithm.
-
-        .. note::
-            For TFNs, 'graded_mean' (l+4m+u)/6 is often preferred as it is a
-            well-regarded method (e.g., Yager's approach) that considers all
-            points of the fuzzy number. 'centroid' (l+m+u)/3 is simpler.
-
-        """
-        return Defuzzification.defuzzify(self, method, **kwargs)
-
     def possibility_degree(self, other: TFN) -> float:
         """
         Calculate the possibility degree that self >= other.
@@ -313,12 +320,39 @@ class TFN:
         upper = self.u - alpha * (self.u - self.m)
         return lower, upper
 
+    def defuzzify(self, method: str = 'graded_mean', **kwargs) -> float:
+        """
+        Defuzzifies the TFN by dispatching to a registered method.
+
+        .. note::
+            For TFNs, 'graded_mean' (l+4m+u)/6 is often preferred as it is a
+            well-regarded method (e.g., Yager's approach) that considers all
+            points of the fuzzy number. 'centroid' (l+m+u)/3 is simpler.
+        """
+        func = self.__class__._defuzzify_methods.get(method)
+        if func is None:
+            available = list(self.__class__._defuzzify_methods.keys())
+            raise ValueError(f"Method '{method}' not implemented for TFN. Available: {available}")
+        return func(self, **kwargs)
+
+    @classmethod
+    def get_available_defuzzify_methods(cls) -> List[str]:
+        return list(cls._defuzzify_methods.keys())
+
+    @classmethod
+    def register_defuzzify_method(cls, name: str, func: Callable):
+        """Registers a new defuzzification function for this number type."""
+        if name in cls._defuzzify_methods:
+            print(f"Warning: Overwriting defuzzify method '{name}' for {cls.__name__}")
+        cls._defuzzify_methods[name] = func
+
 
 @total_ordering
 class TrFN:
     """
     Implementation of a Trapezoidal Fuzzy Number (a, b, c, d).
     """
+    _defuzzify_methods: Dict[str, Callable] = {}
 
     def __init__(self, a: float, b: float, c: float, d: float):
         if not a <= b <= c <= d:
@@ -413,10 +447,6 @@ class TrFN:
         """Converts a TFN to a degenerate TrFN."""
         return TrFN(tfn.l, tfn.m, tfn.m, tfn.u)
 
-    def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
-        """Delegates defuzzification to the external Defuzzification class."""
-        return Defuzzification.defuzzify(self, method, **kwargs)
-
     def power(self, exponent: float) -> TrFN:
         return self.__pow__(exponent)
 
@@ -426,6 +456,27 @@ class TrFN:
         lower = self.a + alpha * (self.b - self.a)
         upper = self.d - alpha * (self.d - self.c)
         return lower, upper
+
+    def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
+        """
+        Defuzzifies the TrFN by dispatching to a registered method.
+        """
+        func = self.__class__._defuzzify_methods.get(method)
+        if func is None:
+            available = list(self.__class__._defuzzify_methods.keys())
+            raise ValueError(f"Method '{method}' not implemented for TrFN. Available: {available}")
+        return func(self, **kwargs)
+
+    @classmethod
+    def get_available_defuzzify_methods(cls) -> List[str]:
+        return list(cls._defuzzify_methods.keys())
+
+    @classmethod
+    def register_defuzzify_method(cls, name: str, func: Callable):
+        """Registers a new defuzzification function for this number type."""
+        if name in cls._defuzzify_methods:
+            print(f"Warning: Overwriting defuzzify method '{name}' for {cls.__name__}")
+        cls._defuzzify_methods[name] = func
 
 
 @total_ordering
@@ -440,6 +491,7 @@ class IFN:
         arithmetic operations implemented here are based on the standard IFS
         algebra as defined by Atanassov and others.
     """
+    _defuzzify_methods: Dict[str, Callable] = {}
 
     def __init__(self, mu: float, nu: float):
         mu, nu = float(mu), float(nu)
@@ -511,15 +563,6 @@ class IFN:
     def __pow__(self, exponent: float) -> IFN:
         return self.power(exponent)
 
-    # --- Comparison ---
-    def score(self) -> float:
-        """Score function S(A) = μ - ν. Used for ranking."""
-        return self.mu - self.nu
-
-    def accuracy(self) -> float:
-        """Accuracy function H(A) = μ + ν. Used as a tie-breaker."""
-        return self.mu + self.nu
-
     def __eq__(self, other: object) -> bool:
         if isinstance(other, IFN):
             return self.mu == other.mu and self.nu == other.nu
@@ -528,13 +571,12 @@ class IFN:
     def __lt__(self, other: IFN) -> bool:
         if not isinstance(other, IFN): return NotImplemented
         # Standard comparison rule for IFNs
-        if self.score() < other.score():
+        if self.defuzzify(method="score") < other.defuzzify(method="score"):
             return True
-        elif self.score() == other.score():
-            return self.accuracy() < other.accuracy()
+        elif self.defuzzify(method="score") == other.defuzzify(method="score"):
+            return self.defuzzify(method="accuracy")  < other.defuzzify(method="accuracy")
         return False
 
-    # --- Protocol Utility Methods ---
     def inverse(self) -> IFN:
         """The inverse (or complement) of an IFN is (ν, μ)."""
         return IFN(mu=self.nu, nu=self.mu)
@@ -549,15 +591,6 @@ class IFN:
         """The multiplicative identity for IFN: (1, 0), representing 'true' or full membership."""
         return IFN(1.0, 0.0)
 
-    def defuzzify(self, method: str = 'score', **kwargs) -> float:
-        """
-        Defuzzifies the IFN into a crisp value using various methods.
-
-        Args:
-            method: 'centroid', 'score', 'entropy', 'accuracy', 'value'.
-        """
-        return Defuzzification.defuzzify(self, method, **kwargs)
-
     @staticmethod
     def from_crisp(value: float) -> IFN:
         """Creates an IFN from a crisp value [0,1], assuming no hesitation."""
@@ -566,6 +599,30 @@ class IFN:
         return IFN(mu=value, nu=1.0 - value)
 
     def alpha_cut(self, alpha: float): return NotImplemented
+
+    def defuzzify(self, method: str = 'score', **kwargs) -> float:
+        """
+        Defuzzifies the IFN into a crisp value using various registered methods.
+
+        Args:
+            method: 'centroid', 'score', 'entropy', 'accuracy', 'value'.
+        """
+        func = self.__class__._defuzzify_methods.get(method)
+        if func is None:
+            available = list(self.__class__._defuzzify_methods.keys())
+            raise ValueError(f"Method '{method}' not implemented for IFN. Available: {available}")
+        return func(self, **kwargs)
+
+    @classmethod
+    def get_available_defuzzify_methods(cls) -> List[str]:
+        return list(cls._defuzzify_methods.keys())
+
+    @classmethod
+    def register_defuzzify_method(cls, name: str, func: Callable):
+        """Registers a new defuzzification function for this number type."""
+        if name in cls._defuzzify_methods:
+            print(f"Warning: Overwriting defuzzify method '{name}' for {cls.__name__}")
+        cls._defuzzify_methods[name] = func
 
 
 @total_ordering
@@ -590,6 +647,8 @@ class GFN:
         used to maintain the Gaussian form throughout calculations but may not
         be perfectly accurate for large sigma values.
     """
+    _defuzzify_methods: Dict[str, Callable] = {}
+
     def __init__(self, m: float, sigma: float):
         if sigma < 0:
             raise ValueError("Standard deviation (sigma) cannot be negative.")
@@ -682,10 +741,31 @@ class GFN:
     def power(self, exponent: float) -> GFN:
         return self.__pow__(exponent)
 
-    def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
-        return Defuzzification.defuzzify(self, method, **kwargs)
-
     def alpha_cut(self, alpha: float): return NotImplemented
+
+    def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
+        """
+        Defuzzifies the GFN into a crisp value using various registered methods.
+
+        Args:
+            method: 'centroid'.
+        """
+        func = self.__class__._defuzzify_methods.get(method)
+        if func is None:
+            available = list(self.__class__._defuzzify_methods.keys())
+            raise ValueError(f"Method '{method}' not implemented for GFN. Available: {available}")
+        return func(self, **kwargs)
+
+    @classmethod
+    def get_available_defuzzify_methods(cls) -> List[str]:
+        return list(cls._defuzzify_methods.keys())
+
+    @classmethod
+    def register_defuzzify_method(cls, name: str, func: Callable):
+        """Registers a new defuzzification function for this number type."""
+        if name in cls._defuzzify_methods:
+            print(f"Warning: Overwriting defuzzify method '{name}' for {cls.__name__}")
+        cls._defuzzify_methods[name] = func
 
 
 @total_ordering
@@ -701,6 +781,8 @@ class IT2TrFN:
         interval. This is useful when experts are unsure even about the shape
         of the fuzzy number representing their judgment.
     """
+    _defuzzify_methods: Dict[str, Callable] = {}
+
     def __init__(self, umf: TrFN, lmf: TrFN):
         # Validate that LMF is "inside" UMF
         if not (umf.a <= lmf.a and umf.b <= lmf.b and lmf.c <= umf.c and lmf.d <= umf.d):
@@ -767,6 +849,14 @@ class IT2TrFN:
     def multiplicative_identity() -> IT2TrFN:
         return IT2TrFN(umf=TrFN.multiplicative_identity(), lmf=TrFN.multiplicative_identity())
 
+    @staticmethod
+    def from_crisp(value: float) -> IT2TrFN:
+        """Creates a crisp IT2TrFN where UMF and LMF are identical crisp TrFNs."""
+        crisp_trfn = TrFN.from_crisp(value)
+        return IT2TrFN(umf=crisp_trfn, lmf=crisp_trfn)
+
+    def alpha_cut(self, alpha: float): return NotImplemented
+
     def defuzzify(self, method: str = 'centroid_average', **kwargs) -> float:
         """
         Defuzzifies the IT2TrFN. The standard approach is to average the
@@ -775,15 +865,22 @@ class IT2TrFN:
         Args:
             method: 'centroid_average', 'centroid' (same).
         """
-        return Defuzzification.defuzzify(self, method, **kwargs)
+        func = self.__class__._defuzzify_methods.get(method)
+        if func is None:
+            available = list(self.__class__._defuzzify_methods.keys())
+            raise ValueError(f"Method '{method}' not implemented for IT2TrFN. Available: {available}")
+        return func(self, **kwargs)
 
-    @staticmethod
-    def from_crisp(value: float) -> IT2TrFN:
-        """Creates a crisp IT2TrFN where UMF and LMF are identical crisp TrFNs."""
-        crisp_trfn = TrFN.from_crisp(value)
-        return IT2TrFN(umf=crisp_trfn, lmf=crisp_trfn)
+    @classmethod
+    def get_available_defuzzify_methods(cls) -> List[str]:
+        return list(cls._defuzzify_methods.keys())
 
-    def alpha_cut(self, alpha: float): return NotImplemented
+    @classmethod
+    def register_defuzzify_method(cls, name: str, func: Callable):
+        """Registers a new defuzzification function for this number type."""
+        if name in cls._defuzzify_methods:
+            print(f"Warning: Overwriting defuzzify method '{name}' for {cls.__name__}")
+        cls._defuzzify_methods[name] = func
 
 
 # Picture Fuzzy Sets

@@ -95,12 +95,12 @@ def test_derive_weights_tfn_extent_analysis(tfn_3x3_matrix):
 
 def test_derive_weights_unsupported_method_for_crisp(crisp_3x3_matrix):
     """Test that fuzzy-only methods fail for Crisp types."""
-    with pytest.raises(ValueError, match="Method 'extent_analysis' is not supported for Crisp matrices"):
+    with pytest.raises(ValueError, match="Method 'extent_analysis' is not registered for number type 'Crisp'. Available methods for 'Crisp': ['geometric_mean', 'eigenvector']"):
         derive_weights(crisp_3x3_matrix, number_type=Crisp, method='extent_analysis')
 
 def test_derive_weights_unsupported_method_for_tfn(tfn_3x3_matrix):
     """Test that crisp-only methods fail for TFN types."""
-    with pytest.raises(ValueError, match="Method 'eigenvector' is not supported for TFN. Use 'geometric_mean', 'extent_analysis', 'llsm', 'lambda_max', or 'fuzzy_programming'."):
+    with pytest.raises(ValueError, match="Method 'eigenvector' is not registered for number type 'TFN'. Available methods for 'TFN': ['geometric_mean', 'extent_analysis', 'llsm', 'lambda_max', 'fuzzy_programming']"):
         derive_weights(tfn_3x3_matrix, number_type=TFN, method='eigenvector')
 
 def test_derive_weights_unsupported_type():
@@ -108,5 +108,5 @@ def test_derive_weights_unsupported_type():
     class FakeNumber: pass
     matrix = np.array([[FakeNumber()]], dtype=object)
 
-    with pytest.raises(TypeError, match="Weight derivation not implemented for number type: FakeNumber"):
+    with pytest.raises(TypeError, match="ValueError: Method 'geometric_mean' is not registered for number type 'FakeNumber'. Available methods for 'FakeNumber': []"):
         derive_weights(matrix, number_type=FakeNumber)

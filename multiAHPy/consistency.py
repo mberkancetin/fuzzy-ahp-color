@@ -1,10 +1,22 @@
 from __future__ import annotations
-from typing import Dict, List, Any, Type, TYPE_CHECKING
+from typing import Dict, List, Any, Type, TYPE_CHECKING, Callable
 import numpy as np
+from .config import configure_parameters
 
 if TYPE_CHECKING:
     from .model import Hierarchy, Node
     from .types import NumericType, Number, TFN
+
+CONSISTENCY_METHODS: Dict[str, Callable] = {}
+
+def register_consistency_method(name: str):
+    """A decorator to register a new consistency calculation method."""
+    def decorator(func: Callable) -> Callable:
+        if name in CONSISTENCY_METHODS:
+            print(f"Warning: Overwriting consistency method '{name}'")
+        CONSISTENCY_METHODS[name] = func
+        return func
+    return decorator
 
 
 class Consistency:
@@ -12,28 +24,17 @@ class Consistency:
     A class with static methods to calculate, check, and analyze the
     consistency of comparison matrices within an Hierarchy.
     """
-
-    # Saaty's Random Consistency Index (RI) values
-    # Source: Saaty, T. L. (2008). Relative measurement and its generalization in
-    # decision making why pairwise comparisons are central in mathematics...
-    # RACSAM-Revista de la Real Academia de Ciencias Exactas, Fisicas y Naturales.
-    _RI_VALUES = {
-        1: 0.00, 2: 0.00, 3: 0.52, 4: 0.89, 5: 1.11, 6: 1.25, 7: 1.35,
-        8: 1.40, 9: 1.45, 10: 1.49, 11: 1.52, 12: 1.54, 13: 1.56, 14: 1.58, 15: 1.59
-    }
-
-    _GCI_THRESHOLDS = {3: 0.31, 4: 0.35} # Default for n>4 is 0.37
-
     @staticmethod
     def _get_random_index(n: int) -> float:
-        """Retrieves the Random Consistency Index (RI) for a given matrix size."""
-        return Consistency._RI_VALUES.get(n, 1.60) # Default for n > 15
+        """Retrieves the Random Consistency Index (RI) from the global config."""
+        return configure_parameters.SAATY_RI_VALUES.get(n, configure_parameters.SAATY_RI_VALUES['default'])
 
     @staticmethod
     def _get_gci_threshold(n: int) -> float:
-        return Consistency._GCI_THRESHOLDS.get(n, 0.37)
+        """Retrieves the GCI threshold from the global config."""
+        return configure_parameters.GCI_THRESHOLDS.get(n, configure_parameters.GCI_THRESHOLDS['default'])
 
-    @staticmethod
+    @register_consistency_method("saaty_cr")
     def calculate_saaty_cr(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
         """
         Calculates Saaty's traditional Consistency Ratio (CR) by first
@@ -104,7 +105,7 @@ class Consistency:
 
         return ci / ri
 
-    @staticmethod
+    @register_consistency_method("gci")
     def calculate_gci(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
         """
         Calculates the Geometric Consistency Index (GCI) for the matrix.
@@ -144,8 +145,8 @@ class Consistency:
         gci = (2 / ((n - 1) * (n - 2))) * sum_of_squared_errors
         return gci
 
-    @staticmethod
-    def calculate_mikhailov_lambda(matrix: np.ndarray, number_type: Type[TFN]) -> float:
+    @register_consistency_method("mikhailov_lambda")
+    def calculate_mikhailov_lambda(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
         """
         Calculates the consistency index (lambda) using Mikhailov's (2004)
         Fuzzy Programming method.
@@ -158,21 +159,28 @@ class Consistency:
             indicates inconsistency.
         """
         from .weight_derivation import mikhailov_fuzzy_programming
+        from .types import TFN
+        if not isinstance(matrix[0,0], TFN):
+            return "N/A (TFN only)"
+
+        number_type = type(matrix[0,0])
 
         try:
             results = mikhailov_fuzzy_programming(matrix, number_type)
             if results['optimization_success']:
                 return results['lambda_consistency']
             else:
-                return -1.0 # Return negative value to indicate optimization failure
-        except Exception:
-            return -1.0
+                message = results.get('optimization_message', 'Optimization failed.')
+                reason = message.split(':')[1].strip() if ':' in message else message
+                return f"Failed ({reason})"
+        except Exception as e:
+            return f"Error ({type(e).__name__})"
 
     @staticmethod
     def check_model_consistency(
         model: Hierarchy,
         consistency_method: str = 'centroid',
-        saaty_cr_threshold: float = 0.1
+        saaty_cr_threshold: float | None = None # Allow override
     ) -> Dict[str, Dict[str, Any]]:
         """
         Performs a comprehensive consistency check on all matrices in the model,
@@ -189,38 +197,29 @@ class Consistency:
         """
         results = {}
         from .types import TFN
+
         def _recursive_check(node: Node):
             if node.comparison_matrix is not None:
                 matrix = node.comparison_matrix
                 n = matrix.shape[0]
                 node_results = {"matrix_size": n}
 
-                # --- Calculate all relevant metrics ---
-                # 1. Saaty's CR (Approximation)
-                saaty_cr = Consistency.calculate_saaty_cr(matrix, consistency_method)
-                node_results["saaty_cr"] = saaty_cr
+                for name, func in CONSISTENCY_METHODS.items():
+                    try:
+                        node_results[name] = func(matrix, consistency_method)
+                    except Exception as e:
+                        node_results[name] = f"Error: {e}"
 
-                # 2. Geometric Consistency Index (GCI)
-                gci = Consistency.calculate_gci(matrix, consistency_method)
-                node_results["gci"] = gci
-
-                # 3. Mikhailov's Lambda (only for TFN matrices)
-                if isinstance(matrix[0,0], TFN):
-                    lambda_consistency = Consistency.calculate_mikhailov_lambda(matrix, TFN)
-                    node_results["mikhailov_lambda"] = lambda_consistency
-                else:
-                    node_results["mikhailov_lambda"] = "N/A"
+                # Use the provided threshold, or fall back to the global config default
+                final_cr_threshold = saaty_cr_threshold if saaty_cr_threshold is not None else configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
 
                 # --- Determine overall consistency status ---
                 gci_threshold = Consistency._get_gci_threshold(n)
+                is_cr_ok = node_results.get("saaty_cr", float('inf')) <= final_cr_threshold
+                is_gci_ok = node_results.get("gci", float('inf')) <= gci_threshold
 
-                is_cr_ok = saaty_cr <= saaty_cr_threshold
-                is_gci_ok = gci <= gci_threshold
-
-                # Define overall consistency. We can say it's consistent if both
-                # major indices are below their respective thresholds.
                 node_results["is_consistent"] = is_cr_ok and is_gci_ok
-                node_results["saaty_cr_threshold"] = saaty_cr_threshold
+                node_results["saaty_cr_threshold"] = final_cr_threshold
                 node_results["gci_threshold"] = gci_threshold
 
                 results[node.id] = node_results
@@ -246,7 +245,7 @@ class Consistency:
 
         # Calculate weights from the crisp matrix using a robust method (geometric mean)
         # Add epsilon to avoid log(0)
-        log_matrix = np.log(crisp_matrix + 1e-10)
+        log_matrix = np.log(crisp_matrix + configure_parameters.LOG_EPSILON)
         weights = np.exp(np.mean(log_matrix, axis=1))
         weights /= np.sum(weights)
 

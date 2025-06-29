@@ -1,20 +1,33 @@
 from __future__ import annotations
-from typing import List, Type, TYPE_CHECKING
+from typing import List, Type, TYPE_CHECKING, Callable
 import numpy as np
 
 if TYPE_CHECKING:
     from .types import NumericType, Number, TFN, TrFN, IFN, IT2TrFN
     from .matrix_builder import create_comparison_matrix
 
-# ==============================================================================
-# AGGREGATION OF JUDGMENTS
-# ==============================================================================
+
+AGGREGATION_REGISTRY = {}
+
+def register_aggregation_method(number_type_name: str, method_name: str):
+    """A decorator to register a new matrix aggregation method."""
+    def decorator(func: Callable) -> Callable:
+        if (number_type_name, method_name) in AGGREGATION_REGISTRY:
+            print(f"Warning: Overwriting aggregation method '{method_name}'")
+        AGGREGATION_REGISTRY[(number_type_name, method_name)] = func
+        return func
+    return decorator
 
 def _ifn_similarity(ifn1: IFN, ifn2: IFN) -> float:
     """Calculates a similarity score between two IFNs based on distance."""
     # Using normalized Hamming distance
     distance = 0.5 * (abs(ifn1.mu - ifn2.mu) + abs(ifn1.nu - ifn2.nu) + abs(ifn1.pi - ifn2.pi))
     return 1 - distance
+
+
+# ==============================================================================
+# AGGREGATION OF JUDGMENTS
+# ==============================================================================
 
 def aggregate_matrices(
     matrices: List[np.ndarray],
@@ -82,83 +95,105 @@ def aggregate_matrices(
             raise ValueError("Sum of expert weights cannot be zero.")
         weights = [w / weight_sum for w in expert_weights]
 
-    # --- Dispatch to the correct aggregation method ---
+    # --- Dispatch using the Registry ---
+    type_name = number_type.__name__
+    key = (type_name, method)
 
-    # Initialize the aggregated matrix using a helper from the matrix_factory module
+    aggregation_func = AGGREGATION_REGISTRY.get(key)
+
+    if aggregation_func is None:
+        raise ValueError(
+            f"Unknown aggregation method: '{method}' for '{type_name}'. Available methods: {list(AGGREGATION_REGISTRY.keys())}"
+        )
+
+    return aggregation_func(matrices=matrices, n=n, number_type=number_type, weights=weights)
+
+
+@register_aggregation_method('TFN', 'geometric')
+@register_aggregation_method('TrFN', 'geometric')
+@register_aggregation_method('GFN', 'geometric')
+@register_aggregation_method('IT2TrFN', 'geometric')
+@register_aggregation_method('IFN', 'geometric')
+@register_aggregation_method('Crisp', 'geometric')
+def _aggregate_geometric(matrices: List[np.ndarray], n: int, number_type: Type[IFN], weights: List[float]) -> np.ndarray:
     from .matrix_builder import create_comparison_matrix
     aggregated_matrix = create_comparison_matrix(n, number_type)
-
-    if number_type.__name__ == 'IFN':
-            if method == 'ifwa':
-                return _aggregate_ifn_ifwa(matrices, n, number_type, expert_weights)
-            elif method == 'consensus':
-                return _aggregate_ifn_consensus(matrices, n, number_type)
-            else:
-                raise ValueError(f"Unsupported method '{method}' for IFN. Use 'ifwa' or 'consensus'.")
-    else:
-        for i in range(n):
-            for j in range(n):
-                if i == j: continue
-
-                if method == "geometric":
-                    # Weighted geometric mean: product of (matrix_k ^ weight_k)
-                    agg_cell = number_type.multiplicative_identity()
-                    for k, matrix in enumerate(matrices):
-                        agg_cell *= matrix[i, j] ** weights[k]
-                    aggregated_matrix[i, j] = agg_cell
-
-                elif method == "arithmetic":
-                    # Weighted arithmetic mean: sum of (matrix_k * weight_k)
-                    agg_cell = number_type.neutral_element()
-                    for k, matrix in enumerate(matrices):
-                        agg_cell += matrix[i, j] * weights[k]
-                    aggregated_matrix[i, j] = agg_cell
-
-                elif method == "median":
-                    if not hasattr(matrices[0][0,0], '__dict__'):
-                        raise TypeError("Median aggregation requires component-wise fuzzy numbers (e.g., TFN, TrFN).")
-
-                    components = list(matrices[0][0,0].__dict__.keys())
-                    median_params = [
-                        np.median([getattr(matrix[i, j], comp_name) for matrix in matrices])
-                        for comp_name in components
-                    ]
-                    aggregated_matrix[i, j] = number_type(*median_params)
-
-                elif method == "min_max":
-                    # --- Rationale Comment ---
-                    # This method creates an "envelope" of all expert judgments.
-                    # The lower and upper bounds are the absolute min/max across all experts.
-                    # For the middle component(s), we use the arithmetic mean as a measure
-                    # of central tendency, a common approach cited in literature
-                    # (e.g., Awasthi et al., 2018; Prakash & Barua, 2016a).
-
-                    if not hasattr(matrices[0][0,0], '__dict__') or len(matrices[0][0,0].__dict__) < 3:
-                        raise TypeError("Min-Max aggregation requires fuzzy numbers with at least 3 components (e.g., TFN, TrFN).")
-
-                    components = list(matrices[0][0,0].__dict__.keys())
-                    l_values = [getattr(m[i, j], components[0]) for m in matrices]
-                    u_values = [getattr(m[i, j], components[-1]) for m in matrices]
-
-                    # Find min of lower, mean of middle(s), max of upper
-                    agg_l, agg_u = min(l_values), max(u_values)
-
-                    if len(components) == 4: # TrFN case
-                        m_values = [getattr(m[i, j], components[1]) for m in matrices]
-                        c_values = [getattr(m[i, j], components[2]) for m in matrices]
-                        agg_m, agg_c = np.mean(m_values), np.mean(c_values)
-                        aggregated_matrix[i, j] = number_type(agg_l, agg_m, agg_c, agg_u)
-                    else: # TFN case
-                        m_values = [getattr(m[i, j], components[1]) for m in matrices]
-                        agg_m = np.mean(m_values)
-                        aggregated_matrix[i, j] = number_type(agg_l, agg_m, agg_u)
-
-                else:
-                    raise ValueError(f"Unknown aggregation method: '{method}'. "
-                                    "Available: 'arithmetic', 'geometric', 'median', 'min_max'.")
-
+    for i in range(n):
+        for j in range(n):
+            if i == j: continue
+            agg_cell = number_type.multiplicative_identity()
+            for k, matrix in enumerate(matrices):
+                agg_cell *= matrix[i, j] ** weights[k]
+            aggregated_matrix[i, j] = agg_cell
     return aggregated_matrix
 
+@register_aggregation_method('TFN', 'arithmetic')
+@register_aggregation_method('TrFN', 'arithmetic')
+@register_aggregation_method('Crisp', 'arithmetic')
+def _aggregate_arithmetic(matrices: List[np.ndarray], n: int, number_type: Type[IFN], weights: List[float]) -> np.ndarray:
+
+    from .matrix_builder import create_comparison_matrix
+    aggregated_matrix = create_comparison_matrix(n, number_type)
+    for i in range(n):
+        for j in range(n):
+            if i == j: continue
+            agg_cell = number_type.neutral_element()
+            for k, matrix in enumerate(matrices):
+                agg_cell += matrix[i, j] * weights[k]
+            aggregated_matrix[i, j] = agg_cell
+    return aggregated_matrix
+
+@register_aggregation_method('TFN', 'median')
+@register_aggregation_method('TrFN', 'median')
+@register_aggregation_method('Crisp', 'median')
+def _aggregate_median(matrices: List[np.ndarray], n: int, number_type: Type[IFN], weights: List[float]) -> np.ndarray:
+    from .matrix_builder import create_comparison_matrix
+    aggregated_matrix = create_comparison_matrix(n, number_type)
+    for i in range(n):
+        for j in range(n):
+            if i == j: continue
+            if not hasattr(matrices[0][0,0], '__dict__'):
+                raise TypeError("Median aggregation requires component-wise fuzzy numbers (e.g., TFN, TrFN).")
+
+            components = list(matrices[0][0,0].__dict__.keys())
+            median_params = [
+                np.median([getattr(matrix[i, j], comp_name) for matrix in matrices])
+                for comp_name in components
+            ]
+            aggregated_matrix[i, j] = number_type(*median_params)
+    return aggregated_matrix
+
+@register_aggregation_method('TFN', 'min_max')
+@register_aggregation_method('TrFN', 'min_max')
+@register_aggregation_method('Crisp', 'min_max')
+def _aggregate_min_max(matrices: List[np.ndarray], n: int, number_type: Type[IFN], weights: List[float]) -> np.ndarray:
+    from .matrix_builder import create_comparison_matrix
+    aggregated_matrix = create_comparison_matrix(n, number_type)
+    for i in range(n):
+        for j in range(n):
+            if i == j: continue
+            if not hasattr(matrices[0][0,0], '__dict__') or len(matrices[0][0,0].__dict__) < 3:
+                raise TypeError("Min-Max aggregation requires fuzzy numbers with at least 3 components (e.g., TFN, TrFN).")
+
+            components = list(matrices[0][0,0].__dict__.keys())
+            l_values = [getattr(m[i, j], components[0]) for m in matrices]
+            u_values = [getattr(m[i, j], components[-1]) for m in matrices]
+
+            # Find min of lower, mean of middle(s), max of upper
+            agg_l, agg_u = min(l_values), max(u_values)
+
+            if len(components) == 4: # TrFN case
+                m_values = [getattr(m[i, j], components[1]) for m in matrices]
+                c_values = [getattr(m[i, j], components[2]) for m in matrices]
+                agg_m, agg_c = np.mean(m_values), np.mean(c_values)
+                aggregated_matrix[i, j] = number_type(agg_l, agg_m, agg_c, agg_u)
+            else: # TFN case
+                m_values = [getattr(m[i, j], components[1]) for m in matrices]
+                agg_m = np.mean(m_values)
+                aggregated_matrix[i, j] = number_type(agg_l, agg_m, agg_u)
+    return aggregated_matrix
+
+@register_aggregation_method('IFN', 'ifwa')
 def _aggregate_ifn_ifwa(matrices: List[np.ndarray], n: int, number_type: Type[IFN], weights: List[float]) -> np.ndarray:
     """Aggregates IFN matrices using the Intuitionistic Fuzzy Weighted Average."""
     aggregated_matrix = create_comparison_matrix(n, number_type)
@@ -181,7 +216,8 @@ def _aggregate_ifn_ifwa(matrices: List[np.ndarray], n: int, number_type: Type[IF
 
     return aggregated_matrix
 
-def _aggregate_ifn_consensus(matrices: List[np.ndarray], n: int, number_type: Type[IFN]) -> np.ndarray:
+@register_aggregation_method('IFN', 'consensus')
+def _aggregate_ifn_consensus(matrices: List[np.ndarray], n: int, number_type: Type[IFN], weights: List[float]) -> np.ndarray:
     """
     Aggregates IFN matrices based on the consensus degree between experts.
     This method does not use pre-assigned expert weights.
@@ -213,6 +249,74 @@ def _aggregate_ifn_consensus(matrices: List[np.ndarray], n: int, number_type: Ty
 
     # Step 4: Aggregate using the consensus weights (using the IFWA method)
     return _aggregate_ifn_ifwa(matrices, n, number_type, consensus_weights)
+
+
+# ==============================================================================
+# AGGREGATION OF PRIORITIES
+# ==============================================================================
+
+def aggregate_priorities(
+    matrices: List[np.ndarray],
+    method: str = "geometric_mean",
+    expert_weights: List[float] | None = None
+) -> np.ndarray:
+    """
+    Aggregates priorities by first calculating individual weight vectors for each
+    expert's matrix and then combining these weight vectors.
+    This corresponds to the "Aggregation of Priorities" workflow.
+
+    .. note::
+        This method is useful when you want to weigh the final calculated
+        priorities of experts, rather than their initial judgments.
+
+    Args:
+        matrices: A list of comparison matrices from participants.
+        method (str): The method used to derive weights for each individual.
+        expert_weights (List[float], optional): A list of weights for each expert's
+                                                 final priority vector. If None,
+                                                 equal weights are assumed.
+
+    Returns:
+        A single, aggregated crisp priority vector (NumPy array).
+    """
+    if not matrices:
+        raise ValueError("Matrix list cannot be empty.")
+
+    # --- Step 1: Calculate Individual Priority Vectors ---
+    from .weight_derivation import derive_weights # Local import to avoid circular dependency
+
+    individual_crisp_weights = []
+    for matrix in matrices:
+        number_type = type(matrix[0, 0])
+        # Derive weights for the current matrix
+        results = derive_weights(matrix, number_type, method=method)
+        # We need the crisp weights for aggregation
+        individual_crisp_weights.append(results['crisp_weights'])
+
+    # We now have a list of weight vectors, e.g., [[0.6, 0.4], [0.7, 0.3]]
+    # Convert to a 2D NumPy array for easier computation: (num_experts x num_criteria)
+    weights_matrix = np.array(individual_crisp_weights)
+
+    # --- Step 2: Aggregate the Priority Vectors ---
+    # Validate and normalize expert weights
+    num_experts = len(matrices)
+    if expert_weights is None:
+        weights = np.full(num_experts, 1.0 / num_experts)
+    else:
+        if len(expert_weights) != num_experts:
+            raise ValueError("Number of expert weights must match the number of matrices.")
+        weight_sum = sum(expert_weights)
+        if abs(weight_sum) < 1e-9:
+            raise ValueError("Sum of expert weights cannot be zero.")
+        weights = np.array(expert_weights) / weight_sum
+
+    # --- Step 3: Calculate the Weighted Average ---
+    # Use np.average with the 'weights' parameter for a clean, weighted average.
+    # axis=0 calculates the average down each column (for each criterion).
+    final_group_priorities = np.average(weights_matrix, axis=0, weights=weights)
+
+    # Final normalization to ensure it sums perfectly to 1
+    return final_group_priorities / np.sum(final_group_priorities)
 
 def aggregate_priorities_ifwa(
     priorities: List[IFN],
@@ -266,71 +370,3 @@ def aggregate_priorities_ifwa(
     # Import locally to avoid potential circular dependencies if this file is imported elsewhere
     from .types import IFN
     return IFN(agg_mu, agg_nu)
-
-
-# ==============================================================================
-# AGGREGATION OF PRIORITIES
-# ==============================================================================
-
-def aggregate_priorities(
-    matrices: List[np.ndarray],
-    derivation_method: str = "geometric_mean",
-    expert_weights: List[float] | None = None
-) -> np.ndarray:
-    """
-    Aggregates priorities by first calculating individual weight vectors for each
-    expert's matrix and then combining these weight vectors.
-    This corresponds to the "Aggregation of Priorities" workflow.
-
-    .. note::
-        This method is useful when you want to weigh the final calculated
-        priorities of experts, rather than their initial judgments.
-
-    Args:
-        matrices: A list of comparison matrices from participants.
-        derivation_method (str): The method used to derive weights for each individual.
-        expert_weights (List[float], optional): A list of weights for each expert's
-                                                 final priority vector. If None,
-                                                 equal weights are assumed.
-
-    Returns:
-        A single, aggregated crisp priority vector (NumPy array).
-    """
-    if not matrices:
-        raise ValueError("Matrix list cannot be empty.")
-
-    # --- Step 1: Calculate Individual Priority Vectors ---
-    from .weight_derivation import derive_weights # Local import to avoid circular dependency
-
-    individual_crisp_weights = []
-    for matrix in matrices:
-        number_type = type(matrix[0, 0])
-        # Derive weights for the current matrix
-        results = derive_weights(matrix, number_type, method=derivation_method)
-        # We need the crisp weights for aggregation
-        individual_crisp_weights.append(results['crisp_weights'])
-
-    # We now have a list of weight vectors, e.g., [[0.6, 0.4], [0.7, 0.3]]
-    # Convert to a 2D NumPy array for easier computation: (num_experts x num_criteria)
-    weights_matrix = np.array(individual_crisp_weights)
-
-    # --- Step 2: Aggregate the Priority Vectors ---
-    # Validate and normalize expert weights
-    num_experts = len(matrices)
-    if expert_weights is None:
-        weights = np.full(num_experts, 1.0 / num_experts)
-    else:
-        if len(expert_weights) != num_experts:
-            raise ValueError("Number of expert weights must match the number of matrices.")
-        weight_sum = sum(expert_weights)
-        if abs(weight_sum) < 1e-9:
-            raise ValueError("Sum of expert weights cannot be zero.")
-        weights = np.array(expert_weights) / weight_sum
-
-    # --- Step 3: Calculate the Weighted Average ---
-    # Use np.average with the 'weights' parameter for a clean, weighted average.
-    # axis=0 calculates the average down each column (for each criterion).
-    final_group_priorities = np.average(weights_matrix, axis=0, weights=weights)
-
-    # Final normalization to ensure it sums perfectly to 1
-    return final_group_priorities / np.sum(final_group_priorities)

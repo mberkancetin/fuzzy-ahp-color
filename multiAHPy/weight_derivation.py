@@ -17,11 +17,34 @@ def _check_scipy_availability():
         raise ImportError("Fuzzy Programming methods require the 'scipy' library. "
                           "Please install it using: pip install scipy")
 
+
 # ==============================================================================
-# 1. GENERIC & CLASSIC AHP ALGORITHMS
+# 1. REGISTRY FOR CUSTOMIZATION
 # ==============================================================================
 
-def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consistency_method: str) -> List[Number]:
+WEIGHT_DERIVATION_REGISTRY = {}
+
+def register_weight_method(number_type_name: str, method_name: str):
+    """A decorator to register a new weight derivation method."""
+    def decorator(func):
+        if (number_type_name, method_name) in WEIGHT_DERIVATION_REGISTRY:
+            print(f"Warning: Overwriting existing weight method for ({number_type_name}, {method_name})")
+        WEIGHT_DERIVATION_REGISTRY[(number_type_name, method_name)] = func
+        return func
+    return decorator
+
+
+# ==============================================================================
+# 2. GENERIC & CLASSIC AHP ALGORITHMS
+# ==============================================================================
+
+@register_weight_method('TFN', 'geometric_mean')
+@register_weight_method('TrFN', 'geometric_mean')
+@register_weight_method('GFN', 'geometric_mean')
+@register_weight_method('IFN', 'geometric_mean')
+@register_weight_method('IT2TrFN', 'geometric_mean')
+@register_weight_method('Crisp', 'geometric_mean')
+def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consistency_method: str = "centroid") -> List[Number]:
     """
     Derives weights using the fuzzy geometric mean method.
 
@@ -30,6 +53,13 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
         used in classical AHP. It is generally considered a robust and stable method
         that correctly handles the ratio-scale nature of AHP judgments. It is often
         recommended for its mathematical consistency and reliable results.
+
+    .. note::
+        **Academic Note:** This is one valid approach when directly applied
+        to an aggregated IFN matrix; however, another common approach in the
+        literature involves calculating crisp weights for each expert first,
+        then aggregating those priorities using a method like IFWA
+        (see the 'aggregation' module).
 
     Args:
         matrix: The comparison matrix of shape (n, n).
@@ -56,6 +86,7 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
     weights = [geo_mean * sum_inverse for geo_mean in row_geo_means]
     return weights
 
+@register_weight_method('Crisp', 'eigenvector')
 def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], max_iter=20, tol=1e-6) -> List[Number]:
     """
     Derives weights using the principal eigenvector method (Power Iteration).
@@ -95,9 +126,11 @@ def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], max_iter=20
     return [number_type(w) for w in normalized_weights]
 
 # ==============================================================================
-# 2. FUZZY-SPECIFIC AHP ALGORITHMS
+# 3. FUZZY-SPECIFIC AHP ALGORITHMS
 # ==============================================================================
 
+@register_weight_method('TFN', 'extent_analysis')
+@register_weight_method('TrFN', 'extent_analysis')
 def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[str, Any]:
     """
     Implements Chang's (1996) extent analysis method for deriving weights from
@@ -149,6 +182,8 @@ def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[s
         "min_degrees": min_degrees
     }
 
+@register_weight_method('TFN', 'llsm')
+@register_weight_method('TrFN', 'llsm')
 def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components: List[str]) -> List[Number]:
     """
     Derives weights using a generic Fuzzy Logarithmic Least Squares Method (LLSM).
@@ -192,6 +227,8 @@ def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components:
 
     return fuzzy_weights
 
+@register_weight_method('TFN', 'lambda_max')
+@register_weight_method('TrFN', 'llsm')
 def lambda_max_method(matrix: np.ndarray, number_type: Type[Number]) -> List[Number]:
     """
     Derives fuzzy weights using the Lambda-max method by Csutora and Buckley (2001).
@@ -246,7 +283,8 @@ def lambda_max_method(matrix: np.ndarray, number_type: Type[Number]) -> List[Num
 
     return fuzzy_weights
 
-def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[str, Any]:
+@register_weight_method('TFN', 'fuzzy_programming')
+def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN], **kwargs) -> Dict[str, Any]:
     """
     Derives crisp weights and a consistency index using the fuzzy programming
     method by Mikhailov (2004).
@@ -260,61 +298,60 @@ def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN]) -> D
     _check_scipy_availability()
     n = matrix.shape[0]
 
-    # The variables for the optimizer will be [w_0, w_1, ..., w_{n-1}, λ]
-    # So there are n+1 variables in total.
+    try:
+        consistency_method = kwargs.get('consistency_method', 'centroid')
+        initial_weights_results = derive_weights(matrix, number_type, method='geometric_mean', consistency_method=consistency_method)
+        initial_weights = initial_weights_results['crisp_weights']
+    except Exception:
+        initial_weights = np.full(n, 1/n)
 
-    # Objective function: We want to MAXIMIZE lambda, which is equivalent
-    # to MINIMIZING -lambda. Our variable vector x will have lambda as its last element.
+    # Initial guess for the optimizer: [w_0, ..., w_{n-1}, λ]
+    initial_guess = np.append(initial_weights, 0.5) # Start with a reasonable lambda
+
+    # Objective function: Minimize -lambda
     def objective(x):
-        return -x[-1] # Minimize -λ
+        return -x[-1]
 
-    # Constraints
-    constraints = []
-    # 1. Sum of weights must be 1: Σw_i - 1 = 0
-    constraints.append({'type': 'eq', 'fun': lambda x: np.sum(x[:-1]) - 1})
-
-    # 2. Add the two main constraints for each upper-triangle fuzzy judgment
+    constraints = [{'type': 'eq', 'fun': lambda x: np.sum(x[:-1]) - 1}]
     for i in range(n):
         for j in range(i + 1, n):
             tfn = matrix[i, j]
+            # Ensure l, m, u are valid TFNs
+            if not (tfn.l <= tfn.m <= tfn.u):
+                raise ValueError(f"Invalid TFN at ({i},{j}): {tfn}. l <= m <= u must hold.")
+
             l, m, u = tfn.l, tfn.m, tfn.u
-
             # Constraint 1: (m-l)λw_j - w_i + l*w_j <= 0
-            cons1 = {'type': 'ineq', 'fun': lambda x, i=i, j=j, l=l, m=m: -((m-l)*x[-1]*x[j] - x[i] + l*x[j])}
-
+            constraints.append({'type': 'ineq', 'fun': lambda x, i=i, j=j, l=l, m=m: -((m - l) * x[-1] * x[j] - x[i] + l * x[j])})
             # Constraint 2: (u-m)λw_j + w_i - u*w_j <= 0
-            cons2 = {'type': 'ineq', 'fun': lambda x, i=i, j=j, u=u, m=m: -((u-m)*x[-1]*x[j] + x[i] - u*x[j])}
+            constraints.append({'type': 'ineq', 'fun': lambda x, i=i, j=j, u=u, m=m: -((u - m) * x[-1] * x[j] + x[i] - u * x[j])})
 
-            constraints.append(cons1)
-            constraints.append(cons2)
+    # Bounds: w_i > 0 and λ >= 0
+    bounds = [(1e-9, None)] * n + [(0, None)]
 
-    # Bounds for the variables: w_i > 0 and λ >= 0
-    bounds = [(1e-9, None) for _ in range(n)] + [(0, None)] # w_i are strictly positive, λ can be 0
-
-    # Initial guess for the variables
-    initial_guess = np.array([1/n] * n + [0.5]) # Equal weights, lambda=0.5
-
-    # Run the optimizer
     result = minimize(objective, initial_guess, method='SLSQP', bounds=bounds, constraints=constraints)
-
     if not result.success:
-        print(f"Warning: Fuzzy programming optimization failed or did not converge. Reason: {result.message}")
+        return {
+            "weights": [number_type.from_crisp(w) for w in initial_weights], # Return initial guess as a fallback
+            "crisp_weights": initial_weights,
+            "lambda_consistency": -1.0, # Failure signal
+            "optimization_success": False,
+            "optimization_message": f"Optimization failed: {result.message}. This often indicates high matrix inconsistency."
+        }
 
-    # Extract the results
     crisp_weights = result.x[:-1]
     lambda_consistency = result.x[-1]
 
     return {
         "weights": [number_type.from_crisp(w) for w in crisp_weights],
-        "crisp_weights": crisp_weights,
+        "crisp_weights": crisp_weights / np.sum(crisp_weights), # Final normalization
         "lambda_consistency": lambda_consistency,
         "optimization_success": result.success,
         "optimization_message": result.message
     }
 
-
 # ==============================================================================
-# 3. THE PRIMARY DISPATCHER FUNCTION
+# 4. THE PRIMARY DISPATCHER FUNCTION
 # ==============================================================================
 
 def derive_weights(
@@ -344,87 +381,30 @@ def derive_weights(
         A list of derived weights.
     """
     type_name = number_type.__name__
+    key = (type_name, method)
 
-    weights = []
-    # --- Route to classic AHP methods for Crisp type ---
-    if type_name == 'Crisp':
-        from .types import TFN, TrFN, Crisp, GFN, NumericType, Number, IFN, IT2TrFN
-        if method == 'geometric_mean':
-            weights =  geometric_mean_method(matrix, number_type, consistency_method=consistency_method)
-        elif method == 'eigenvector':
-            weights =  eigenvector_method(matrix, number_type)
-        else:
-            raise ValueError(f"Method '{method}' is not supported for Crisp matrices. Use 'geometric_mean' or 'eigenvector'.")
+    derivation_func = WEIGHT_DERIVATION_REGISTRY.get(key)
 
-    # --- Route to fuzzy methods for TFN type ---
-    elif type_name == 'TFN':
-        from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
-        if method == 'geometric_mean':
-            weights =  geometric_mean_method(matrix, number_type, consistency_method=consistency_method)
-        elif method == 'extent_analysis':
-            if not isinstance(matrix[0,0], TFN):
-                 raise TypeError("Cannot use 'extent_analysis' on non-TFN matrix.")
-            return extent_analysis_method(matrix, number_type)
-        elif method == 'llsm':
-            weights =  fuzzy_llsm_method(matrix, number_type, components=['l', 'm', 'u'])
-        elif method == 'lambda_max':
-            weights = lambda_max_method(matrix, number_type)
-        elif method == 'fuzzy_programming':
-            return mikhailov_fuzzy_programming(matrix, number_type)
-        else:
-            raise ValueError(f"Method '{method}' is not supported for TFN. Use 'geometric_mean', 'extent_analysis', 'llsm', 'lambda_max', or 'fuzzy_programming'.")
+    if derivation_func is None:
+        available_methods = [m for (t, m) in WEIGHT_DERIVATION_REGISTRY.keys() if t == type_name]
+        raise ValueError(
+            f"Method '{method}' is not registered for number type '{type_name}'. Available methods for '{type_name}': {available_methods}"
+        )
 
-    # --- Route to fuzzy methods for TrFN type ---
-    elif type_name == 'TrFN':
-        from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
-        if method == 'geometric_mean':
-            weights =  geometric_mean_method(matrix, number_type, consistency_method=consistency_method)
-        elif method == 'llsm':
-            weights =  fuzzy_llsm_method(matrix, number_type, components=['a', 'b', 'c', 'd'])
-        elif method == 'lambda_max':
-            weights = lambda_max_method(matrix, number_type)
-        else:
-            raise ValueError(f"Method '{method}' is not supported for TrFN. Use 'geometric_mean', 'llsm' or 'lambda_max'.")
+    result = derivation_func(matrix, number_type)
 
-    # --- Route to fuzzy methods for GFN type ---
-    elif type_name == 'GFN':
-        from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
-        if method == 'geometric_mean':
-            weights =  geometric_mean_method(matrix, number_type, consistency_method=consistency_method)
-        else:
-            raise ValueError(f"Method '{method}' is not supported for GFN. Currently only 'geometric_mean' is available.")
-
-    # --- Route to fuzzy methods for IT2TrFN type ---
-    elif type_name == 'IT2TrFN':
-        from .types import IT2TrFN
-        if method == 'geometric_mean':
-            weights =  geometric_mean_method(matrix, number_type, consistency_method=consistency_method)
-        else:
-            raise ValueError(f"Method '{method}' is not supported for IT2TrFN. Currently only 'geometric_mean' is available.")
-
-    # --- Route to fuzzy methods for IFN type ---
-    elif type_name == 'IFN':
-        from .types import IFN
-        if method == 'geometric_mean':
-            """
-            .. note::
-                **Academic Note:** This applies the geometric mean method directly
-                to an aggregated IFN matrix. This is one valid approach. Another
-                common approach in the literature involves calculating crisp weights
-                for each expert first, then aggregating those priorities using
-                a method like IFWA (see the 'aggregation' module).
-            """
-            weights =  geometric_mean_method(matrix, number_type, consistency_method=consistency_method)
-        else:
-            raise ValueError(f"Method '{method}' is not supported for IFN. Currently only 'geometric_mean' is available.")
-
+    if isinstance(result, dict):
+        if 'weights' not in result or 'crisp_weights' not in result:
+             raise TypeError(f"Registered method {derivation_func.__name__} must return a dict with 'weights' and 'crisp_weights'")
+        return result
+    elif isinstance(result, list):
+        weights = result
+        crisp_weights = np.array([w.defuzzify(method=consistency_method) for w in weights])
+        return {
+            "weights": weights,
+            "crisp_weights": crisp_weights / np.sum(crisp_weights), # Normalize
+            "possibility_matrix": None, # Not applicable
+            "min_degrees": None # Not applicable
+        }
     else:
-        raise TypeError(f"Weight derivation not implemented for number type: {type_name}")
-
-    crisp_weights = np.array([w.defuzzify(method=consistency_method) for w in weights])
-    return {
-        "weights": weights,
-        "crisp_weights": crisp_weights / np.sum(crisp_weights), # Normalize
-        "possibility_matrix": None, # Not applicable
-        "min_degrees": None # Not applicable
-    }
+        raise TypeError(f"Registered method {derivation_func.__name__} returned an unexpected type: {type(result)}")

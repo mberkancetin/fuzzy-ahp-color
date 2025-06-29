@@ -4,7 +4,6 @@ import json
 import pickle
 from typing import Dict, List, Optional, Tuple, Any, Type, Generic
 from .consistency import Consistency
-from .defuzzification import Defuzzification, normalize_crisp_weights
 from .weight_derivation import derive_weights
 from .types import TFN, Number
 
@@ -224,50 +223,6 @@ class Hierarchy(Generic[Number]):
                 child_node.local_weight = weights[i]
         for child in node.children:
             self._calculate_local_weights_recursive(child, method)
-
-    def calculate_leaf_alternative_scores(self):
-        """
-        Calculates the scores for all alternatives at every level of the hierarchy.
-        """
-        print("\n--- Calculating Alternative Scores ---")
-        if not self.alternatives:
-            print("No alternatives to score.")
-            return
-
-        leaf_nodes = self.root.get_all_leaf_nodes()
-        leaf_node_ids = {leaf.id for leaf in leaf_nodes}
-
-        for alt in self.alternatives:
-            # Validate that all necessary performance scores are set
-            for leaf_id in leaf_node_ids:
-                if leaf_id not in alt.performance_scores:
-                    raise ValueError(f"Missing performance score for leaf node '{leaf_id}' in alternative '{alt.name}'.")
-
-            # Kick off the recursive, bottom-up calculation for each alternative
-            alt.overall_score = self._calculate_node_score_for_alt(self.root, alt)
-
-        print("Alternative scores calculation complete.")
-
-    def _calculate_node_score_for_alt(self, node: Node[Number], alt: Alternative) -> float:
-        """
-        Recursively calculates the performance score of an alternative for a given node.
-        """
-        if node.id in alt.node_scores:
-            return alt.node_scores[node.id]
-
-        if node.is_leaf:
-            score = alt.performance_scores[node.id]
-            alt.node_scores[node.id] = score
-            return score
-
-        # Recursive step: score is the weighted sum of its children's scores.
-        total_score = 0.0
-        for child in node.children:
-            child_score = self._calculate_node_score_for_alt(child, alt)
-            total_score += child_score * child.local_weight
-
-        alt.node_scores[node.id] = total_score
-        return total_score
 
     def calculate_alternative_scores(self, derivation_method: str = 'geometric_mean'):
         """
