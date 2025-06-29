@@ -161,7 +161,7 @@ def test_aggregate_priorities(sample_crisp_matrices):
     # For matrix 2: [[1,2],[0.5,1]], weights are [0.667, 0.333]
 
     # Test with equal expert weights
-    result_equal = aggregate_priorities(sample_crisp_matrices, derivation_method='geometric_mean')
+    result_equal = aggregate_priorities(sample_crisp_matrices, method='geometric_mean')
     expected_equal = np.average([[0.8, 0.2], [2/3, 1/3]], axis=0)
     assert result_equal == pytest.approx(expected_equal, abs=1e-3)
 
@@ -169,7 +169,7 @@ def test_aggregate_priorities(sample_crisp_matrices):
     expert_weights = [0.25, 0.75] # Expert 2 is 3x more important
     result_weighted = aggregate_priorities(
         sample_crisp_matrices,
-        derivation_method='geometric_mean',
+        method='geometric_mean',
         expert_weights=expert_weights
     )
     expected_weighted = np.average([[0.8, 0.2], [2/3, 1/3]], axis=0, weights=expert_weights)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List, Dict, Any, TYPE_CHECKING
 import numpy as np
+from .config import configure_parameters
 
 if TYPE_CHECKING:
     from .model import Hierarchy, Node
@@ -13,7 +14,7 @@ class Validation:
     """
 
     @staticmethod
-    def validate_matrix_properties(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float = 1e-6) -> List[str]:
+    def validate_matrix_properties(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float | None = None) -> List[str]:
         """
         Validates a single comparison matrix for dimensions, diagonal, and reciprocity.
 
@@ -24,6 +25,7 @@ class Validation:
         Returns:
             A list of error strings. An empty list means the matrix is valid.
         """
+        final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
         errors = []
 
         # 1. Validate Dimensions
@@ -39,7 +41,7 @@ class Validation:
         # We check the defuzzified centroid value for the diagonal.
         identity_one = matrix[0,0].multiplicative_identity()
         for i in range(n):
-            if abs(matrix[i, i].defuzzify(method=consistency_method) - identity_one.defuzzify(method=consistency_method)) > tolerance:
+            if abs(matrix[i, i].defuzzify(method=consistency_method) - identity_one.defuzzify(method=consistency_method)) > final_tolerance:
                 errors.append(f"Diagonal element at ({i},{i}) is not 1. Found: {matrix[i,i]}")
 
         # 3. Validate Reciprocity
@@ -49,7 +51,7 @@ class Validation:
                 val = matrix[i, j]
 
                 # Compare the centroids of the two fuzzy numbers
-                if abs(val.defuzzify(method=consistency_method) - inverse_val.defuzzify(method=consistency_method)) > tolerance:
+                if abs(val.defuzzify(method=consistency_method) - inverse_val.defuzzify(method=consistency_method)) > final_tolerance:
                     errors.append(f"Reciprocity failed between ({i},{j}) and ({j},{i}). "
                                   f"Value: {val}, Inverse of counterpart: {inverse_val}")
 

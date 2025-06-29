@@ -245,7 +245,7 @@ def test_ifn_comparison(ifn1, ifn2):
     # Test 1: Simple score comparison
     # ifn1 (0.6, 0.3): score = 0.3
     # ifn2 (0.5, 0.4): score = 0.1
-    assert ifn1.score() > ifn2.score()
+    assert ifn1.defuzzify(method="score") > ifn2.defuzzify(method="score")
     assert ifn1 > ifn2
     assert ifn2 < ifn1
 
@@ -255,8 +255,8 @@ def test_ifn_comparison(ifn1, ifn2):
     ifn_high_accuracy = IFN(0.6, 0.3) # ifn1, score = 0.3, accuracy = 0.9
 
     # Verify scores are equal and accuracies are different
-    assert ifn_low_accuracy.score() == pytest.approx(ifn_high_accuracy.score())
-    assert ifn_high_accuracy.accuracy() > ifn_low_accuracy.accuracy()
+    assert ifn_low_accuracy.defuzzify(method="score") == pytest.approx(ifn_high_accuracy.defuzzify(method="score"))
+    assert ifn_high_accuracy.defuzzify(method="accuracy") > ifn_low_accuracy.defuzzify(method="accuracy") 
 
     # The one with higher accuracy should be considered "greater" in a tie
     assert ifn_high_accuracy > ifn_low_accuracy

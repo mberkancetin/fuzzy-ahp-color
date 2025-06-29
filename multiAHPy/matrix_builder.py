@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import List, Dict, Type, TYPE_CHECKING
 import numpy as np
 import math
+from .config import configure_parameters
 
 if TYPE_CHECKING:
     from .types import NumericType, Number, TFN, IT2TrFN, TrFN, IFN, Crisp
@@ -15,42 +16,15 @@ class FuzzyScale:
     Handles the conversion of crisp Saaty-scale judgments (1-9) into various
     fuzzy number types using different predefined conversion scales.
     """
-    _SCALES = {
-        # A common, simple scale with a consistent +/- 1 spread (except at boundaries).
-        # See, e.g., Mikhailov, L. (2004) for a similar linear approach.
-        "linear": {
-            1: (1, 1, 1), 2: (1, 2, 3), 3: (2, 3, 4), 4: (3, 4, 5),
-            5: (4, 5, 6), 6: (5, 6, 7), 7: (6, 7, 8), 8: (7, 8, 9), 9: (8, 9, 9)
-        },
-        # A scale often cited, e.g., in work by Ayhan & Kilic (2015). The value 9
-        # is often treated as crisp to represent absolute certainty.
-        "saaty_original": {
-            1: (1, 1, 1), 2: (1, 2, 3), 3: (2, 3, 4), 4: (3, 4, 5),
-            5: (4, 5, 6), 6: (5, 6, 7), 7: (6, 7, 8), 8: (7, 8, 9), 9: (9, 9, 9)
-        },
-        # A scale with a wider spread, representing higher uncertainty in judgments
-        "wide": {
-            1: (1, 1, 3), 2: (1, 2, 4), 3: (2, 3, 5), 4: (3, 4, 6),
-            5: (4, 5, 7), 6: (5, 6, 8), 7: (6, 7, 9), 8: (7, 8, 9), 9: (8, 9, 9)
-        },
-        # A scale with a very small, uniform spread, representing high confidence.
-        "narrow": {
-            1: (1, 1, 1), 2: (1.5, 2, 2.5), 3: (2.5, 3, 3.5), 4: (3.5, 4, 4.5),
-            5: (4.5, 5, 5.5), 6: (5.5, 6, 6.5), 7: (6.5, 7, 7.5), 8: (7.5, 8, 8.5), 9: (8.5, 9, 9)
-        }
-    }
-
-    _IFN_SCALE = {
-        # Based on Nguyen (2019), "A new method...using intuitionistic fuzzy numbers"
-        # (mu, nu) pairs for linguistic terms 1 through 9
-        1: (0.50, 0.40), 2: (0.55, 0.35), 3: (0.60, 0.30), 4: (0.65, 0.25),
-        5: (0.70, 0.20), 6: (0.75, 0.15), 7: (0.80, 0.10), 8: (0.90, 0.05), 9: (1.00, 0.00)
-    }
+    @staticmethod
+    def available_tfn_scales() -> List[str]:
+        """Returns a list of available TFN scale types from the global config."""
+        return list(configure_parameters.FUZZY_TFN_SCALES.keys())
 
     @staticmethod
-    def available_scales() -> List[str]:
-        """Returns a list of available scale types."""
-        return list(FuzzyScale._SCALES.keys())
+    def available_ifn_scales() -> List[str]:
+        """Returns a list of available TFN scale types from the global config."""
+        return list(configure_parameters.FUZZY_IFN_SCALES.keys())
 
     @staticmethod
     def get_fuzzy_number(
@@ -75,8 +49,8 @@ class FuzzyScale:
         Returns:
             An instance of the specified fuzzy number type.
         """
-        if scale not in FuzzyScale._SCALES:
-            raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_scales()}")
+        if scale not in configure_parameters.FUZZY_TFN_SCALES:
+            raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_tfn_scales()}")
 
         if not isinstance(crisp_value, (int, float)):
             raise TypeError("Crisp judgment must be a number.")
@@ -108,15 +82,15 @@ class FuzzyScale:
             if spread:
                 params = (max(1, value - spread), value, value + spread)
             else:
-                params = FuzzyScale._SCALES[scale][value]
+                params = configure_parameters.FUZZY_TFN_SCALES[scale][value]
         elif type_name == 'TrFN':
             params = (max(1, value - spread), value - spread/2, value + spread/2, value + spread)
         elif type_name == 'GFN':
             params = (value, value * (fuzziness / 10.0))
         elif type_name == 'IFN':
-            params = FuzzyScale._IFN_SCALE[value]
+            params = configure_parameters.FUZZY_IFN_SCALES[value]
         elif type_name == 'IT2TrFN':
-            l, m, u = FuzzyScale._SCALES[scale][abs(crisp_value)]
+            l, m, u = configure_parameters.FUZZY_TFN_SCALES[scale][abs(crisp_value)]
 
             umf = TrFN.from_tfn(TFN(max(1, m-umf_spread), m, m+umf_spread))
             lmf = TrFN.from_tfn(TFN(m-lmf_spread, m, m+lmf_spread))
