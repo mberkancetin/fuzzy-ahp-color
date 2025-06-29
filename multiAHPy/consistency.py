@@ -215,10 +215,22 @@ class Consistency:
 
                 # --- Determine overall consistency status ---
                 gci_threshold = Consistency._get_gci_threshold(n)
-                is_cr_ok = node_results.get("saaty_cr", float('inf')) <= final_cr_threshold
-                is_gci_ok = node_results.get("gci", float('inf')) <= gci_threshold
+                saaty_cr_result = node_results.get("saaty_cr")
+                gci_result = node_results.get("gci")
+
+                if isinstance(saaty_cr_result, (int, float)):
+                    is_cr_ok = saaty_cr_result <= final_cr_threshold
+
+                if isinstance(gci_result, (int, float)):
+                    is_gci_ok = gci_result <= gci_threshold
+
+                is_cr_ok = False
+                is_gci_ok = False
 
                 node_results["is_consistent"] = is_cr_ok and is_gci_ok
+                node_results["saaty_cr_check_status"] = "Pass" if is_cr_ok else ("Fail" if isinstance(saaty_cr_result, (int, float)) else "Not Calculated")
+                node_results["gci_check_status"] = "Pass" if is_gci_ok else ("Fail" if isinstance(gci_result, (int, float)) else "Not Calculated")
+
                 node_results["saaty_cr_threshold"] = final_cr_threshold
                 node_results["gci_threshold"] = gci_threshold
 

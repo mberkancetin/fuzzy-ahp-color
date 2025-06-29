@@ -581,6 +581,13 @@ class IFN:
         """The inverse (or complement) of an IFN is (ν, μ)."""
         return IFN(mu=self.nu, nu=self.mu)
 
+    def hesitancy(self) -> float:
+        """
+        Returns the hesitancy degree (π = 1 - μ - ν), also known as the
+        intuitionistic fuzzy index. A higher value indicates more uncertainty.
+        """
+        return self.pi
+
     @staticmethod
     def neutral_element() -> IFN:
         """The additive identity for IFN: (0, 1), representing 'false' or full non-membership."""

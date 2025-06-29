@@ -43,12 +43,24 @@ def _render_expandable_node(
     consistency_data: Dict[str, Any] | None = None,
     is_alt: bool = False,
     alt_obj=None,
+    is_root: bool = False,
     consistency_method: str = "centroid"
 ) -> str:
     """
     Renders a single, generic, expandable node box, now including consistency info.
     """
     body_id = 'node-body-' + str(uuid.uuid4())[:8]
+
+    if is_root:
+        model = node.get_model()
+
+        details_html += f"<li><b>Number Type:</b> {model.number_type.__name__}</li>"
+        details_html += f"<li><b>Weight Derivation:</b> {model.last_used_derivation_method or 'N/A'}</li>"
+        details_html += f"<li><b>Defuzzification (for ranking):</b> {model.last_used_ranking_defuzz_method or 'N/A'}</li>"
+        details_html += f"<li><b>Alternatives:</b> {len(model.alternatives)}</li>"
+        details_html += f"<li><b>Aggregation (Group):</b> {model.last_used_aggregation_method or 'N/A'}</li>"
+
+        header_text = f"Goal: {node.id}"
 
     # --- Prepare details for the expandable body ---
     details_html = "<ul>"
@@ -223,7 +235,7 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None, cons
     <div class="ahp-stage">
         <div class="ahp-stage-title">Goal</div>
         <div style="display: flex; justify-content: center;">
-            {_render_expandable_node(model.root, consistency_results)}
+            {_render_expandable_node(model.root, consistency_results, is_root=True)}
         </div>
     </div>
     """

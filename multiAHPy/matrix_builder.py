@@ -50,7 +50,8 @@ class FuzzyScale:
             An instance of the specified fuzzy number type.
         """
         if scale not in configure_parameters.FUZZY_TFN_SCALES:
-            raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_tfn_scales()}")
+            if scale not in configure_parameters.FUZZY_IFN_SCALES:
+                raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_tfn_scales()}")
 
         if not isinstance(crisp_value, (int, float)):
             raise TypeError("Crisp judgment must be a number.")
@@ -88,7 +89,8 @@ class FuzzyScale:
         elif type_name == 'GFN':
             params = (value, value * (fuzziness / 10.0))
         elif type_name == 'IFN':
-            params = configure_parameters.FUZZY_IFN_SCALES[value]
+            scale = "nyugen"
+            params = configure_parameters.FUZZY_IFN_SCALES[scale][value]
         elif type_name == 'IT2TrFN':
             l, m, u = configure_parameters.FUZZY_TFN_SCALES[scale][abs(crisp_value)]
 

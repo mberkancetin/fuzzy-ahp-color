@@ -121,7 +121,7 @@ def test_calculate_alternative_scores(sample_tfn_model):
     assert alt_a.overall_score is None
 
     # Run score calculation (this is the method being tested)
-    sample_tfn_model.calculate_alternative_scores()
+    sample_tfn_model.rank_alternatives_by_comparison()
 
     # After calculation, scores should be populated
     assert isinstance(alt_a.overall_score, TFN)
@@ -192,7 +192,7 @@ def test_full_end_to_end_tfn_workflow(full_problem_setup):
     # 5. RUN CALCULATIONS AND VERIFY RESULTS
     # --------------------------------------
     model.calculate_weights()
-    model.calculate_alternative_scores()
+    model.rank_alternatives_by_comparison()
 
     # Check that key nodes have valid weights
     cpu_node = model._find_node("CPU")

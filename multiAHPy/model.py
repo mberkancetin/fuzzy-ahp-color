@@ -196,7 +196,7 @@ class Hierarchy(Generic[Number]):
 
         criterion_node.comparison_matrix = matrix
 
-    def calculate_weights(self, method: str = "extent_analysis"):
+    def calculate_weights(self, method: str = "geometric_mean"):
         """
         Calculates all local and global weights for the entire hierarchy.
         """
@@ -209,6 +209,7 @@ class Hierarchy(Generic[Number]):
 
         self.root.calculate_global_weights()
         print("Global weights calculation complete.")
+        self.last_used_derivation_method = method
 
     def _calculate_local_weights_recursive(self, node: Node[Number], method: str):
         """
@@ -224,73 +225,119 @@ class Hierarchy(Generic[Number]):
         for child in node.children:
             self._calculate_local_weights_recursive(child, method)
 
-    def calculate_alternative_scores(self, derivation_method: str = 'geometric_mean'):
+    def rank_alternatives_by_comparison(self, derivation_method: str = 'geometric_mean'):
         """
-        Calculates the final scores for all alternatives by synthesizing the
-        weights through the entire hierarchy.
+        Calculates final scores and ranks alternatives using the 'classic' AHP
+        workflow, where alternatives are pairwise compared under each leaf criterion.
 
-        This method performs the final step of AHP, calculating the priority of
-        each alternative with respect to each leaf criterion and then aggregating
-        those priorities up the tree using the criteria weights.
+        This method is the final synthesis step. It requires that:
+        1. Criteria weights have been calculated with `calculate_weights()`.
+        2. An alternative comparison matrix has been set for EVERY leaf node
+        using `set_alternative_matrix()`.
 
         Args:
             derivation_method (str, optional): The method to use for deriving the
-                                               priorities of alternatives from their
-                                               comparison matrices.
-                                               Defaults to 'geometric_mean'.
+                                            priorities of alternatives from their
+                                            comparison matrices.
+                                            Defaults to 'geometric_mean'.
         """
-        from .weight_derivation import derive_weights # Local import
-        print("\n--- Calculating Alternative Scores ---")
+        from .weight_derivation import derive_weights
+
+        print("\n--- Ranking Alternatives via Pairwise Comparison ---")
 
         if not self.alternatives:
-            print("Warning: No alternatives in the model to score.")
+            print("Warning: No alternatives in the model to rank.")
             return
 
         leaf_nodes = self.root.get_all_leaf_nodes()
         if not leaf_nodes:
             raise ValueError("Hierarchy has no leaf nodes to calculate scores against.")
 
-        # --- Step 1: Pre-calculate local priorities for alternatives under each leaf criterion ---
         alt_local_priorities = {}
 
         for leaf in leaf_nodes:
             if leaf.comparison_matrix is None:
-                # raise ValueError(f"Leaf node '{leaf.id}' is missing its alternative comparison matrix.")
-                pass
+                raise ValueError(f"Leaf node '{leaf.id}' is missing its alternative comparison matrix, which is required for this method.")
 
             results = derive_weights(leaf.comparison_matrix, self.number_type, method=derivation_method)
-
             alt_local_priorities[leaf.id] = results['crisp_weights']
 
-        # --- Step 2: Calculate final score for each alternative ---
         for i, alt in enumerate(self.alternatives):
             alt.overall_score = self._calculate_score_recursive(self.root, i, alt_local_priorities)
+            alt.node_scores[self.root.id] = alt.overall_score # Store the final score at the root
 
-        print("Alternative scores calculation complete.")
+        print("Alternative ranking calculation complete.")
 
     def _calculate_score_recursive(
         self,
         node: Node[Number],
         alternative_index: int,
-        alt_priorities: Dict[str, np.ndarray]
+        alt_local_priorities: Dict[str, np.ndarray]
     ) -> Number:
         """
+        (Helper for rank_alternatives_by_comparison)
         Recursively calculates the score for a single alternative from a specific node downwards.
         """
-        # --- Base Case: If the node is a leaf, its score is the pre-calculated priority ---
         if node.is_leaf:
-            priority_value = alt_priorities[node.id][alternative_index]
+            priority_value = alt_local_priorities[node.id][alternative_index]
             return self.number_type.from_crisp(priority_value)
 
-        # --- Recursive Step: Sum the weighted scores of children ---
         total_score = self.number_type.neutral_element()
         for child in node.children:
-            child_score = self._calculate_score_recursive(child, alternative_index, alt_priorities)
-            total_score += child_score * child.local_weight
+            child_score_contribution = self._calculate_score_recursive(child, alternative_index, alt_local_priorities)
+            total_score += child_score_contribution * child.local_weight
 
         alt = self.alternatives[alternative_index]
         alt.node_scores[node.id] = total_score
 
+        return total_score
+
+    def score_alternatives_by_performance(self):
+        """
+        Calculates final scores for alternatives based on pre-defined performance scores.
+        This is the 'AHP as a Weighting Engine' or 'Scoring Model' workflow.
+
+        This method requires that:
+        1. Criteria weights have been calculated with `calculate_weights()`.
+        2. Each alternative has a normalized performance score (0 to 1) set for EVERY
+        leaf node using `alt.set_performance_score()`.
+        """
+        print("\n--- Scoring Alternatives via Performance Data ---")
+        if not self.alternatives:
+            print("Warning: No alternatives to score.")
+            return
+
+        leaf_nodes = self.root.get_all_leaf_nodes()
+        leaf_node_ids = {leaf.id for leaf in leaf_nodes}
+
+        for alt in self.alternatives:
+            for leaf_id in leaf_node_ids:
+                if leaf_id not in alt.performance_scores:
+                    raise ValueError(f"Missing performance score for leaf node '{leaf_id}' in alternative '{alt.name}'. Use `alt.set_performance_score()`.")
+
+            alt.overall_score = self._calculate_performance_score_recursive(self.root, alt)
+
+        print("Alternative performance scoring complete.")
+
+    def _calculate_performance_score_recursive(self, node: Node[Number], alt: Alternative) -> Number:
+        """
+        (Helper for score_alternatives_by_performance)
+        Recursively calculates the performance score of an alternative for a given node.
+        """
+        if node.id in alt.node_scores:
+            return alt.node_scores[node.id]
+
+        if node.is_leaf:
+            score = self.number_type.from_crisp(alt.performance_scores[node.id])
+            alt.node_scores[node.id] = score
+            return score
+
+        total_score = self.number_type.neutral_element()
+        for child in node.children:
+            child_score = self._calculate_performance_score_recursive(child, alt)
+            total_score += child_score * child.local_weight
+
+        alt.node_scores[node.id] = total_score
         return total_score
 
     def get_rankings(self, consistency_method: str = 'centroid', **kwargs) -> List[Tuple[str, float]]:
@@ -318,6 +365,8 @@ class Hierarchy(Generic[Number]):
             crisp_rankings.append((alt.name, crisp_score))
 
         crisp_rankings.sort(key=lambda x: x[1], reverse=True)
+        self.last_used_ranking_defuzz_method = consistency_method
+
         return crisp_rankings
 
     def check_consistency(self, **kwargs) -> Dict[str, Dict[str, Any]]:

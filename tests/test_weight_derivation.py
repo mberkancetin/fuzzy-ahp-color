@@ -10,6 +10,7 @@ fuzzy comparison matrices.
 
 import pytest
 import numpy as np
+import re
 
 # Import the code to be tested
 from multiAHPy.weight_derivation import derive_weights
@@ -83,9 +84,14 @@ def test_derive_weights_tfn_extent_analysis(tfn_3x3_matrix):
     if not hasattr(TFN, 'possibility_degree'):
         pytest.skip("Skipping extent analysis test: TFN class lacks 'possibility_degree'")
 
-    results = derive_weights(tfn_3x3_matrix, number_type=TFN, method='extent_analysis')
+    with pytest.warns(UserWarning, match=re.escape("Extent Analysis (EAM) is a 'problematic' method according to recent reviews (e.g., Liu et al., 2020). It may produce zero weights incorrectly. Consider using 'geometric_mean' for more robust results.")):
+        results = derive_weights(tfn_3x3_matrix, TFN, method='extent_analysis')
+
     crisp_weights = results['crisp_weights']
     expected_weights = np.array([0.81635, 0.18365, 0.0])
+
+    assert 'weights' in results
+    assert 'crisp_weights' in results
 
     # They should sum to ~1.0
     assert pytest.approx(1.0, abs=1e-3) == sum(crisp_weights)
@@ -95,12 +101,12 @@ def test_derive_weights_tfn_extent_analysis(tfn_3x3_matrix):
 
 def test_derive_weights_unsupported_method_for_crisp(crisp_3x3_matrix):
     """Test that fuzzy-only methods fail for Crisp types."""
-    with pytest.raises(ValueError, match="Method 'extent_analysis' is not registered for number type 'Crisp'. Available methods for 'Crisp': ['geometric_mean', 'eigenvector']"):
+    with pytest.raises(ValueError, match=re.escape("Method 'extent_analysis' is not registered for number type 'Crisp'. Available methods for 'Crisp': ['geometric_mean', 'eigenvector']")):
         derive_weights(crisp_3x3_matrix, number_type=Crisp, method='extent_analysis')
 
 def test_derive_weights_unsupported_method_for_tfn(tfn_3x3_matrix):
     """Test that crisp-only methods fail for TFN types."""
-    with pytest.raises(ValueError, match="Method 'eigenvector' is not registered for number type 'TFN'. Available methods for 'TFN': ['geometric_mean', 'extent_analysis', 'llsm', 'lambda_max', 'fuzzy_programming']"):
+    with pytest.raises(ValueError, match=re.escape("Method 'eigenvector' is not registered for number type 'TFN'. Available methods for 'TFN': ['geometric_mean', 'extent_analysis', 'llsm', 'lambda_max', 'fuzzy_programming']")):
         derive_weights(tfn_3x3_matrix, number_type=TFN, method='eigenvector')
 
 def test_derive_weights_unsupported_type():
@@ -108,5 +114,5 @@ def test_derive_weights_unsupported_type():
     class FakeNumber: pass
     matrix = np.array([[FakeNumber()]], dtype=object)
 
-    with pytest.raises(TypeError, match="ValueError: Method 'geometric_mean' is not registered for number type 'FakeNumber'. Available methods for 'FakeNumber': []"):
+    with pytest.raises(ValueError, match=re.escape("Method 'geometric_mean' is not registered for number type 'FakeNumber'. Available methods for 'FakeNumber': []")):
         derive_weights(matrix, number_type=FakeNumber)

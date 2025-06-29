@@ -1,5 +1,6 @@
 from __future__ import annotations
 import numpy as np
+import math
 from typing import TYPE_CHECKING
 from .types import TFN, TrFN, IFN, IT2TrFN, Crisp, GFN, NumericType, Number
 
@@ -204,6 +205,30 @@ def entropy_method_ifn(ifn: IFN) -> float:
     """
     return 1.0 - abs(ifn.mu - ifn.nu)
 
+def piecewise_score_method_ifn(ifn: IFN, lambda_param: float = 2.0) -> float:
+    """
+    An enhanced score function for IFNs that incorporates the hesitancy degree.
+    Based on Yang et al. (2023) as cited in Zhou & Chen (2025, Eq. 18).
+
+    Args:
+        ifn: The Intuitionistic Fuzzy Number.
+        lambda_param: Controls the influence of the hesitancy degree. Must be >= 2.
+    """
+    if lambda_param < 2:
+        raise ValueError("Lambda parameter must be >= 2.")
+
+    mu, nu, h = ifn.mu, ifn.nu, ifn.hesitancy()
+    score_part = mu - nu
+
+    if h == 0:
+        return score_part
+
+    term = 1 + (lambda_param**abs(mu - nu)) / (10**lambda_param)
+    log_part = h * math.log(term, lambda_param)
+
+    return score_part + log_part if mu >= nu else score_part - log_part
+
+
 
 # ==============================================================================
 # 2. REGISTRATION (The "Wiring")
@@ -236,3 +261,4 @@ IFN.register_defuzzify_method('centroid', score_method_ifn) # 'centroid' is an a
 IFN.register_defuzzify_method('accuracy', accuracy_method_ifn)
 IFN.register_defuzzify_method('value', value_method_ifn)
 IFN.register_defuzzify_method('entropy', entropy_method_ifn)
+IFN.register_defuzzify_method('piecewise_score', piecewise_score_method_ifn)
