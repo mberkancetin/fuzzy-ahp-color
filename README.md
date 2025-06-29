@@ -7,6 +7,8 @@ A flexible, object-oriented Python library for performing both classical and Fuz
 
 Its generic, protocol-based system allows it to seamlessly handle various numeric types, from crisp numbers to different fuzzy representations like **Triangular (TFN)**, **Trapezoidal (TrFN)**, **Intuitionistic (IFN)**, and more. This makes it a powerful tool for modeling the ambiguity and subjectivity inherent in human judgment.
 
+Its core strength is a **"plug-and-play" architecture** built on registries and protocols. This allows users to easily add their own custom logic—new number types, weight derivation algorithms, consistency indices, or aggregation methods—without modifying the library's source code. This makes it an ideal tool for academic research, enabling the replication of past studies and the exploration of new methodologies.
+
 *This library was developed under the supervision of Selim Gündüz, as part of the doctoral thesis: "Developing a fuzzy AHP-based index for measuring corporate responsibility at the local level: Corporate Local Responsibility (COLOR)", currently being conducted in the Department of Business Administration at Adana Alparslan Türkeş Science and Technology University.*
 
 ---
@@ -15,6 +17,8 @@ Its generic, protocol-based system allows it to seamlessly handle various numeri
 
 - **Generic & Type-Safe**: Easily switch between **Classical AHP (`Crisp`)** and **Fuzzy AHP (`TFN`, `TrFN`, etc.)** by changing a single type parameter.
 - **Multi-Level Hierarchy**: Build complex decision models with unlimited criteria and sub-criteria levels using an intuitive `Node`-based structure.
+**Fully Extensible Architecture**: Easily register custom algorithms and parameters. Add your own weight derivation methods, consistency indices, aggregation techniques, or even custom fuzzy number types.
+**Centralized Configuration**: Modify global parameters like Saaty's RI values, consistency thresholds, or fuzzy scales in a single configuration object (multiAHPy.configure_parameters) for easy customization and replication of studies.
 - **Group Decision Support**: Aggregate judgments from multiple experts using standard methods like **Geometric Mean** or advanced techniques like **Intuitionistic Fuzzy Weighted Averaging (IFWA)**.
 - **Multiple Derivation & Consistency Methods**: Implements a wide range of academically-cited algorithms:
   - **Weight Derivation**: Geometric Mean, Chang's Extent Analysis, Mikhailov's Fuzzy Programming.
@@ -46,9 +50,14 @@ Everything in the hierarchy (the goal, criteria, sub-criteria) is a `Node`. A `N
 ### `NumericType` Protocol
 This is the heart of the library's flexibility. Any number class (like `Crisp`, `TFN`, `TrFN`, `IFN`, etc.) that follows this protocol can be used in the model, and all calculations will adapt automatically.
 
+### `Registries` Customization
+Dictionaries that map names (e.g., `geometric_mean`) to functions. This allows for the "plug-and-play" architecture for methods.
+
+
 ### Modules
 - **`model`**: Core classes (`Hierarchy`, `Node`, `Alternative`).
 - **`types`**: All supported number types (`Crisp`, `TFN`, `TrFN`, `IFN`, etc.) and the underlying `NumericType` protocol.
+- **`config`**: A global configuration object holding all adjustable parameters like `SAATY_RI_VALUES` and `GCI_THRESHOLDS`.
 - **`matrix_factory`**: Tools for creating comparison matrices from user input, including the `FuzzyScale` class.
 - **`aggregation`**: Functions for group decision-making, like `aggregate_matrices` and `aggregate_priorities`.
 - **`weight_derivation`**: The algorithms for calculating priority weights from matrices.
@@ -64,5 +73,3 @@ Contributions are welcome! If you find a bug, have a feature request, or want to
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-
