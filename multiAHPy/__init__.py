@@ -1,4 +1,4 @@
-__version__ = "0.0.8.0"
+__version__ = "0.0.9.0"
 
 from multiAHPy import defuzzification
 from .config import configure_parameters

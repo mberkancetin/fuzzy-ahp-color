@@ -37,6 +37,7 @@ class Node(Generic[Number]):
         self.comparison_matrix: Optional[np.ndarray] = None
         self.local_weight: Optional[Number] = None
         self.global_weight: Optional[Number] = None
+        self.model: Optional['Hierarchy[Number]'] = None
 
     def __repr__(self) -> str:
         local_w_str = f"{self.local_weight.defuzzify():.3f}" if self.local_weight is not None else "N/A"
@@ -51,6 +52,20 @@ class Node(Generic[Number]):
         """
         child_node.parent = self
         self.children.append(child_node)
+        if self.model:
+            child_node._set_model_reference(self.model)
+
+    def _set_model_reference(self, model: 'Hierarchy[Number]'):
+        """Recursively sets the model reference for this node and all its children."""
+        self.model = model
+        for child in self.children:
+            child._set_model_reference(model)
+
+    def get_model(self) -> 'Hierarchy[Number]':
+            """Returns the Hierarchy model this node belongs to."""
+            if self.model is None:
+                raise RuntimeError("This node is not part of a Hierarchy model.")
+            return self.model
 
     @property
     def is_leaf(self) -> bool:
@@ -171,6 +186,10 @@ class Hierarchy(Generic[Number]):
         self.root = root_node
         self.alternatives: List[Alternative[Number]] = []
         self.number_type = number_type
+        self.last_used_derivation_method: str | None = None
+        self.last_used_aggregation_method: str | None = None
+        self.last_used_ranking_defuzz_method: str | None = None
+        self.root._set_model_reference(self)
 
     def add_alternative(self, name: str, description: Optional[str] = None):
         """
