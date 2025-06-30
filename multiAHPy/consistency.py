@@ -1,4 +1,5 @@
 from __future__ import annotations
+import inspect
 from typing import Dict, List, Any, Type, TYPE_CHECKING, Callable
 import numpy as np
 from .config import configure_parameters
@@ -9,33 +10,55 @@ if TYPE_CHECKING:
 
 CONSISTENCY_METHODS: Dict[str, Callable] = {}
 
-def register_consistency_method(name: str):
-    """A decorator to register a new consistency calculation method."""
+def register_consistency_method(
+        name: str,
+        has_threshold: bool = False,
+        threshold_func: Callable | None = None,
+        tolerance: float | None = None
+    ):
+    """
+    A decorator to register a new consistency calculation method.
+
+    Args:
+        name: The name of the consistency index (e.g., 'saaty_cr').
+        has_threshold: Set to True if this index has a pass/fail threshold.
+        threshold_func: A function that takes matrix size `n` and returns the
+                        threshold value. Required if `has_threshold` is True.
+    """
+    if has_threshold and threshold_func is None:
+        raise ValueError(f"Method '{name}' is registered with a threshold but no threshold_func was provided.")
+
     def decorator(func: Callable) -> Callable:
         if name in CONSISTENCY_METHODS:
             print(f"Warning: Overwriting consistency method '{name}'")
-        CONSISTENCY_METHODS[name] = func
+
+        CONSISTENCY_METHODS[name] = {
+            "function": func,
+            "has_threshold": has_threshold,
+            "threshold_func": threshold_func,
+            "tolerance": tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+        }
         return func
     return decorator
-
 
 class Consistency:
     """
     A class with static methods to calculate, check, and analyze the
     consistency of comparison matrices within an Hierarchy.
     """
+    def _get_saaty_cr_threshold(n: int, saaty_cr_threshold: float | None = None, **kwargs) -> float:
+        return saaty_cr_threshold if saaty_cr_threshold is not None else configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
+
+    def _get_gci_threshold(n: int, **kwargs) -> float:
+        return configure_parameters.GCI_THRESHOLDS.get(n, configure_parameters.GCI_THRESHOLDS['default'])
+
     @staticmethod
     def _get_random_index(n: int) -> float:
         """Retrieves the Random Consistency Index (RI) from the global config."""
         return configure_parameters.SAATY_RI_VALUES.get(n, configure_parameters.SAATY_RI_VALUES['default'])
 
-    @staticmethod
-    def _get_gci_threshold(n: int) -> float:
-        """Retrieves the GCI threshold from the global config."""
-        return configure_parameters.GCI_THRESHOLDS.get(n, configure_parameters.GCI_THRESHOLDS['default'])
-
-    @register_consistency_method("saaty_cr")
-    def calculate_saaty_cr(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
+    @register_consistency_method("saaty_cr", has_threshold=True, threshold_func=_get_saaty_cr_threshold)
+    def calculate_saaty_cr(matrix: np.ndarray, consistency_method: str = 'centroid', epsilon: float | None = None) -> float:
         """
         Calculates Saaty's traditional Consistency Ratio (CR) by first
         defuzzifying the fuzzy matrix. This is a practical approximation
@@ -61,7 +84,6 @@ class Consistency:
         if n <= 2:
             return 0.0
 
-        # Defuzzify the matrix
         crisp_matrix = np.zeros((n, n))
         for i in range(n):
             for j in range(n):
@@ -71,7 +93,6 @@ class Consistency:
                 else:
                     crisp_matrix[i, j] = float(cell)
 
-        # Validate matrix values
         if np.any(crisp_matrix <= 0):
             raise ValueError("Comparison matrix contains non-positive values after defuzzification")
 
@@ -83,29 +104,24 @@ class Consistency:
         # Calculate lambda_max
         Aw = crisp_matrix @ weights
 
-        # Handle potential zero weights more robustly
         if np.any(weights == 0):
-            # This shouldn't happen with proper geometric mean calculation
-            weights = np.maximum(weights, 1e-10)
+            from .config import configure_parameters
+            final_epsilon = epsilon if epsilon is not None else configure_parameters.LOG_EPSILON
+            weights = np.maximum(weights, final_epsilon)
 
         lambda_max = np.mean(Aw / weights)
 
-        # Calculate CI
         ci = (lambda_max - n) / (n - 1)
-
-        # CI should theoretically be non-negative; negative values indicate numerical errors
         if ci < 0:
             ci = 0.0
 
-        # Get Random Index and calculate CR
         ri = Consistency._get_random_index(n)
-
         if ri <= 0:
             return 0.0
 
         return ci / ri
 
-    @register_consistency_method("gci")
+    @register_consistency_method("gci", has_threshold=True, threshold_func=_get_gci_threshold)
     def calculate_gci(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
         """
         Calculates the Geometric Consistency Index (GCI) for the matrix.
@@ -179,68 +195,86 @@ class Consistency:
     @staticmethod
     def check_model_consistency(
         model: Hierarchy,
-        consistency_method: str = 'centroid',
-        saaty_cr_threshold: float | None = None # Allow override
+        **kwargs
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Performs a comprehensive consistency check on all matrices in the model,
-        calculating Saaty's CR, GCI, and Mikhailov's Lambda where applicable.
+        Performs a comprehensive consistency check on all matrices in the model.
+
+        This function dynamically runs all registered consistency methods and, for
+        those with thresholds, determines a Pass/Fail status. The overall
+        'is_consistent' flag is True only if all threshold-based checks pass.
 
         Args:
-            model: The Hierarchy (AHPModel) instance to check.
-            consistency_method: The defuzzification method used for CR and GCI.
-            saaty_cr_threshold: The acceptable threshold for Saaty's CR.
-
-        Returns:
-            A dictionary where keys are node IDs and values are a detailed
-            dictionary of all calculated consistency metrics.
+            model: The Hierarchy instance to check.
+            **kwargs: Additional arguments to pass down to calculation functions,
+                      e.g., `consistency_method='centroid'` or `saaty_cr_threshold=0.2`.
         """
-        results = {}
-        from .types import TFN
+        results_aggregator = {}
 
         def _recursive_check(node: Node):
-            if node.comparison_matrix is not None:
-                matrix = node.comparison_matrix
-                n = matrix.shape[0]
-                node_results = {"matrix_size": n}
+            if node.comparison_matrix is None:
+                return
 
-                for name, func in CONSISTENCY_METHODS.items():
-                    try:
-                        node_results[name] = func(matrix, consistency_method)
-                    except Exception as e:
-                        node_results[name] = f"Error: {e}"
+            matrix = node.comparison_matrix
+            n = matrix.shape[0]
 
-                # Use the provided threshold, or fall back to the global config default
-                final_cr_threshold = saaty_cr_threshold if saaty_cr_threshold is not None else configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
+            node_results = {"matrix_size": n}
 
-                # --- Determine overall consistency status ---
-                gci_threshold = Consistency._get_gci_threshold(n)
-                saaty_cr_result = node_results.get("saaty_cr")
-                gci_result = node_results.get("gci")
+            consistency_check_outcomes = []
 
-                if isinstance(saaty_cr_result, (int, float)):
-                    is_cr_ok = saaty_cr_result <= final_cr_threshold
+            for name, meta in CONSISTENCY_METHODS.items():
+                calc_func = meta["function"]
+                try:
+                    func_params = inspect.signature(calc_func).parameters
 
-                if isinstance(gci_result, (int, float)):
-                    is_gci_ok = gci_result <= gci_threshold
+                    available_args = {
+                        "matrix": matrix,
+                        "number_type": type(matrix[0, 0]),
+                    }
+                    available_args.update(kwargs)
 
-                is_cr_ok = False
-                is_gci_ok = False
+                    args_for_this_call = {
+                        p_name: available_args[p_name]
+                        for p_name in func_params
+                        if p_name in available_args
+                    }
 
-                node_results["is_consistent"] = is_cr_ok and is_gci_ok
-                node_results["saaty_cr_check_status"] = "Pass" if is_cr_ok else ("Fail" if isinstance(saaty_cr_result, (int, float)) else "Not Calculated")
-                node_results["gci_check_status"] = "Pass" if is_gci_ok else ("Fail" if isinstance(gci_result, (int, float)) else "Not Calculated")
+                    value = calc_func(**args_for_this_call)
+                    node_results[name] = value
 
-                node_results["saaty_cr_threshold"] = final_cr_threshold
-                node_results["gci_threshold"] = gci_threshold
+                    if meta.get("has_threshold"):
+                        threshold_func = meta["threshold_func"]
 
-                results[node.id] = node_results
+                        threshold_value = threshold_func(n, **kwargs)
+                        node_results[f"{name}_threshold"] = threshold_value
+                        final_tolerance = meta["tolerance"]
 
+                        is_ok = False
+                        status = "Not Calculated"
+                        if isinstance(value, (int, float)):
+                            is_ok = value <= (threshold_value + final_tolerance)
+                            status = "Pass" if is_ok else "Fail"
+
+                        node_results[f"{name}_status"] = status
+                        consistency_check_outcomes.append(is_ok)
+
+                except Exception as e:
+                    node_results[name] = f"Error: {type(e).__name__} - {e}"
+                    if meta.get("has_threshold"):
+                        node_results[f"{name}_status"] = "Error"
+                        consistency_check_outcomes.append(False)
+
+            node_results["is_consistent"] = all(consistency_check_outcomes)
+            results_aggregator[node.id] = node_results
+
+        def traverse(node: Node):
+            _recursive_check(node)
             for child in node.children:
-                _recursive_check(child)
+                traverse(child)
 
-        _recursive_check(model.root)
-        return results
+        traverse(model.root)
+
+        return results_aggregator
 
     @staticmethod
     def get_consistency_recommendations(model: Hierarchy, inconsistent_node_id: str, consistency_method: str = 'centroid') -> List[str]:
@@ -266,7 +300,7 @@ class Consistency:
         inconsistent_pair = (None, None)
         for i in range(n):
             for j in range(i + 1, n):
-                if weights[j] == 0: continue # Avoid division by zero
+                if weights[j] == 0: continue
                 expected_val = weights[i] / weights[j]
                 actual_val = crisp_matrix[i, j]
                 # Logarithmic difference is better for ratio scales
@@ -286,12 +320,10 @@ class Consistency:
         i, j = inconsistent_pair
         children_names = [child.id for child in node.children]
 
-        # Line 2: Identify the pair
         recommendations.append(
             f"The most inconsistent judgment appears to be between '{children_names[i]}' and '{children_names[j]}'."
         )
 
-        # Line 3: Provide the values
         current_judgment = crisp_matrix[i, j]
         suggested_judgment = weights[i] / weights[j]
         recommendations.append(

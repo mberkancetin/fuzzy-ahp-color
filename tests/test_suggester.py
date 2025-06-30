@@ -65,6 +65,13 @@ expert_data = {
 # --- 5. Run the Pipeline ---
 pipeline.run(expert_matrices=expert_data)
 
+root_node = pipeline.model.root
+
+# Get the judgments for the criteria comparisons from multiple experts
+criteria_judgments_table = root_node.judgments_to_table()
+
+print(criteria_judgments_table)
+
 # --- 6. Access the Results ---
 print("\nFinal Rankings from Pipeline:")
 print(pipeline.rankings)

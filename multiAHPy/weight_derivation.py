@@ -70,6 +70,8 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
     Returns:
         A list of derived weights of the specified number_type.
     """
+    from .config import configure_parameters
+
     n = matrix.shape[0]
 
     row_geo_means = []
@@ -80,7 +82,7 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
         row_geo_means.append(row_product.power(1.0 / n))
 
     total_sum = sum(row_geo_means, number_type.neutral_element())
-    if abs(total_sum.defuzzify(method=consistency_method)) < 1e-9:
+    if abs(total_sum.defuzzify(method=consistency_method)) < configure_parameters.FLOAT_TOLERANCE:
         return [number_type.neutral_element() for _ in range(n)]
 
     sum_inverse = total_sum.inverse()
@@ -184,7 +186,7 @@ def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[s
 
 @register_weight_method('TFN', 'llsm')
 @register_weight_method('TrFN', 'llsm')
-def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components: List[str]) -> List[Number]:
+def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components: List[str], epsilon: float | None = None) -> List[Number]:
     """
     Derives weights using a generic Fuzzy Logarithmic Least Squares Method (LLSM).
     This method is applied component-wise to a fuzzy number.
@@ -197,11 +199,13 @@ def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components:
     Returns:
         A list of derived fuzzy weights.
     """
+    from .config import configure_parameters
+    final_epsilon = epsilon if epsilon is not None else configure_parameters.LOG_EPSILON
+
     n = matrix.shape[0]
 
-    # Helper function to apply LLSM to a single crisp component matrix
     def llsm_component(component_matrix: np.ndarray) -> np.ndarray:
-        component_matrix = np.where(component_matrix == 0, 1e-10, component_matrix)
+        component_matrix = np.where(component_matrix == 0, final_epsilon, component_matrix)
         log_matrix = np.log(component_matrix)
         # The original formula uses geometric mean of columns, which is equivalent
         # to the arithmetic mean of the log of rows.
@@ -209,7 +213,6 @@ def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components:
         weights = np.exp(row_means)
         return weights / np.sum(weights)
 
-    # Calculate weights for each component
     component_weights = {}
     for comp_name in components:
         comp_matrix = np.array([[getattr(cell, comp_name) for cell in row] for row in matrix])
@@ -218,11 +221,7 @@ def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components:
     fuzzy_weights = []
     for i in range(n):
         weight_params = [component_weights[comp_name][i] for comp_name in components]
-
-        # Ensure the parameters are in the correct order for the constructor (l<=m<=u)
         sorted_params = sorted(weight_params)
-
-        # Instantiate the fuzzy number object
         fuzzy_weights.append(number_type(*sorted_params))
 
     return fuzzy_weights
@@ -295,6 +294,8 @@ def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN], **kw
         weight vector that is "most consistent" with the original fuzzy judgments.
         The resulting lambda (λ) is a direct measure of consistency (λ > 0 is good).
     """
+    from .config import configure_parameters
+
     _check_scipy_availability()
     n = matrix.shape[0]
 
@@ -327,7 +328,7 @@ def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN], **kw
             constraints.append({'type': 'ineq', 'fun': lambda x, i=i, j=j, u=u, m=m: -((u - m) * x[-1] * x[j] + x[i] - u * x[j])})
 
     # Bounds: w_i > 0 and λ >= 0
-    bounds = [(1e-9, None)] * n + [(0, None)]
+    bounds = [(configure_parameters.FLOAT_TOLERANCE, None)] * n + [(0, None)]
 
     result = minimize(objective, initial_guess, method='SLSQP', bounds=bounds, constraints=constraints)
     if not result.success:

@@ -36,12 +36,10 @@ def normalize_crisp_weights(crisp_weights: np.ndarray) -> np.ndarray:
     np.ndarray
         Normalized crisp weights
     """
-    # Check for all zeros
     if np.all(crisp_weights == 0):
         n = len(crisp_weights)
-        return np.ones(n) / n  # Return equal weights if all are zero
+        return np.ones(n) / n
 
-    # Normalize to sum to 1
     weight_sum = np.sum(crisp_weights)
     if weight_sum > 0:
         return crisp_weights / weight_sum
@@ -88,7 +86,8 @@ def graded_mean_integration(fuzzy_number: TFN) -> float:
     float
         The defuzzified value
     """
-    # The formula for triangular fuzzy numbers is (l + 4m + u) / 6
+    # The formula for triangular fuzzy numbers is
+    # (l + 4m + u) / 6
     return (fuzzy_number.l + 4 * fuzzy_number.m + fuzzy_number.u) / 6.0
 
 def alpha_cut_method(fuzzy_number: TFN, alpha: float = 0.5) -> float:
@@ -122,7 +121,7 @@ def alpha_cut_method(fuzzy_number: TFN, alpha: float = 0.5) -> float:
     # Return the midpoint of the alpha-cut interval
     return (l_alpha + r_alpha) / 2.0
 
-def weighted_average_method(fuzzy_number: TFN, weights: list = None) -> float:
+def weighted_average_method(fuzzy_number: TFN, weights: list = None, epsilon: float | None = None) -> float:
     """
     Defuzzify a triangular fuzzy number using the weighted average method.
     This method applies user-defined weights to each component of the fuzzy number.
@@ -139,17 +138,16 @@ def weighted_average_method(fuzzy_number: TFN, weights: list = None) -> float:
     float
         The defuzzified value
     """
-    # Default to equal weights if none provided
+    from .config import configure_parameters
+    final_epsilon = epsilon if epsilon is not None else configure_parameters.LOG_EPSILON
+
     if weights is None:
         weights = [1/3, 1/3, 1/3]
-
-    # Validate weights
     if len(weights) != 3:
         raise ValueError("Weights must be a list of 3 values")
-    if abs(sum(weights) - 1.0) > 1e-10:
+    if abs(sum(weights) - 1.0) > final_epsilon:
         raise ValueError("Weights must sum to 1")
 
-    # Apply weights
     return (weights[0] * fuzzy_number.l +
             weights[1] * fuzzy_number.m +
             weights[2] * fuzzy_number.u)
@@ -157,10 +155,13 @@ def weighted_average_method(fuzzy_number: TFN, weights: list = None) -> float:
 def average_method_trfn(trfn: TrFN) -> float:
     return (trfn.a + trfn.b + trfn.c + trfn.d) / 4.0
 
-def centroid_method_trfn(trfn: TrFN) -> float:
+def centroid_method_trfn(trfn: TrFN, tolerance: float | None = None) -> float:
+    from .config import configure_parameters
+    final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
     num = (trfn.d**2 + trfn.c**2 + trfn.d*trfn.c) - (trfn.a**2 + trfn.b**2 + trfn.a*trfn.b)
     den = 3 * ((trfn.d + trfn.c) - (trfn.a + trfn.b))
-    return num / den if abs(den) > 1e-9 else (trfn.a + trfn.d) / 2.0
+    return num / den if abs(den) > final_tolerance else (trfn.a + trfn.d) / 2.0
 
 def centroid_method_it2trfn(fuzzy_number: IT2TrFN) -> float:
     centroid_umf = fuzzy_number.umf.defuzzify(method='centroid')
@@ -229,9 +230,8 @@ def piecewise_score_method_ifn(ifn: IFN, lambda_param: float = 2.0) -> float:
     return score_part + log_part if mu >= nu else score_part - log_part
 
 
-
 # ==============================================================================
-# 2. REGISTRATION (The "Wiring")
+# 2. REGISTRATION
 # ==============================================================================
 
 Crisp.register_defuzzify_method('centroid', value_method_crisp)

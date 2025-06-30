@@ -45,7 +45,7 @@ class Configuration:
 
         # --- Fuzzy Scale Parameters (from matix_builder.py) ---
 
-        # Predefined TFN scales
+        # Predefined fuzzy scales
         self.FUZZY_TFN_SCALES: Dict[str, Dict[int, tuple]] = {
             "linear": {
                 1: (1, 1, 1), 2: (1, 2, 3), 3: (2, 3, 4), 4: (3, 4, 5),
@@ -89,7 +89,6 @@ class Configuration:
                 5: (0.40, 0.50), 6: (0.25, 0.70), 7: (0.10, 0.90)
             }
         }
-
 
         # --- General Numerical Parameters ---
 

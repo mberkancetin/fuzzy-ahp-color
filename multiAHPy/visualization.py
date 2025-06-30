@@ -803,6 +803,96 @@ def _create_report_dataframe(
 
     return report_df, cons_df
 
+def format_matrix_as_table(
+    matrix: np.ndarray,
+    item_names: List[str],
+    consistency_method: str | None = None
+) -> 'pd.DataFrame':
+    """
+    Formats a single comparison matrix into a classic n x n table.
+
+    Args:
+        matrix: The single comparison matrix to format.
+        item_names: A list of the names of the criteria/alternatives.
+        consistency_method (optional): If provided, converts fuzzy numbers to crisp values.
+
+    Returns:
+        A pandas DataFrame representing the classic AHP matrix.
+    """
+    _check_pandas_availability()
+
+    n = len(item_names)
+    table_data = []
+
+    for i in range(n):
+        row_data = []
+        for j in range(n):
+            cell = matrix[i, j]
+            if consistency_method and hasattr(cell, 'defuzzify'):
+                row_data.append(f"{cell.defuzzify(method=consistency_method):.3f}")
+            else:
+                row_data.append(str(cell))
+        table_data.append(row_data)
+
+    df = pd.DataFrame(table_data, index=item_names, columns=item_names)
+    return df
+
+
+def format_group_judgments_as_table(
+    matrices: List[np.ndarray],
+    item_names: List[str],
+    source_names: List[str] | None = None,
+    consistency_method: str | None = None
+) -> 'pd.DataFrame':
+    """
+    Formats a list of comparison matrices into a tabular, flattened pair format,
+    ideal for reporting group judgments.
+
+    Args:
+        matrices: A list of comparison matrices (e.g., one per expert).
+        item_names: A list of the names of the criteria/alternatives.
+        source_names (optional): Names for each matrix source (e.g., ['Expert 1', 'Expert 2']).
+        consistency_method (optional): If provided, converts fuzzy numbers to crisp values.
+
+    Returns:
+        A pandas DataFrame containing the formatted group judgments.
+    """
+    _check_pandas_availability()
+
+    if not matrices:
+        return pd.DataFrame()
+
+    n = len(item_names)
+    if source_names and len(source_names) != len(matrices):
+        raise ValueError("Length of source_names must match the number of matrices.")
+    elif not source_names:
+        source_names = [f"Source {i+1}" for i in range(len(matrices))]
+
+    table_data = []
+    pair_labels = []
+
+    # Iterate through the upper triangle to define the pairs
+    for i in range(n):
+        for j in range(i + 1, n):
+            pair_label = f"({item_names[i]}, {item_names[j]})"
+            pair_labels.append(pair_label)
+
+            row_data = {}
+            for k, matrix in enumerate(matrices):
+                cell = matrix[i, j]
+                source_name = source_names[k]
+
+                if consistency_method and hasattr(cell, 'defuzzify'):
+                    row_data[source_name] = f"{cell.defuzzify(method=consistency_method):.3f}"
+                else:
+                    row_data[source_name] = str(cell)
+
+            table_data.append(row_data)
+
+    df = pd.DataFrame(table_data, index=pd.Index(pair_labels, name="Pairs"))
+    return df
+
+
 def _export_to_excel(model, filename, derivation_method, consistency_method):
     if not filename.endswith('.xlsx'):
         filename += '.xlsx'

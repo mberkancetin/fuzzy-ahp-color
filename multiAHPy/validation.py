@@ -119,7 +119,7 @@ class Validation:
         return errors
 
     @staticmethod
-    def run_all_validations(model: Hierarchy, tolerance: float = 1e-6, consistency_method: str = "centroid") -> Dict[str, List[str]]:
+    def run_all_validations(model: Hierarchy, tolerance: float | None = None, consistency_method: str = "centroid") -> Dict[str, List[str]]:
         """
         Runs a complete suite of validations on the Hierarchy.
 
@@ -130,6 +130,8 @@ class Validation:
         Returns:
             A dictionary containing lists of errors for each validation category.
         """
+        final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
         all_errors = {
             "hierarchy_completeness": [],
             "matrix_properties": [],
@@ -143,7 +145,7 @@ class Validation:
         matrix_errors = []
         def _collect_matrices(node: 'Node'):
             if node.comparison_matrix is not None:
-                errors = Validation.validate_matrix_properties(node.comparison_matrix, tolerance=tolerance, consistency_method=consistency_method)
+                errors = Validation.validate_matrix_properties(node.comparison_matrix, tolerance=final_tolerance, consistency_method=consistency_method)
                 if errors:
                     matrix_errors.extend([f"[Node: {node.id}] {e}" for e in errors])
             for child in node.children:
@@ -169,19 +171,23 @@ class Validation:
         return errors
 
     @staticmethod
-    def validate_matrix_diagonal(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float = 1e-9) -> List[str]:
+    def validate_matrix_diagonal(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float | None = None) -> List[str]:
         """Validates that diagonal elements are the multiplicative identity (e.g., 1)."""
+        final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
         errors = []
         if matrix.shape[0] == 0: return errors # Handle empty matrix
         identity_one = matrix[0,0].multiplicative_identity()
         for i in range(matrix.shape[0]):
-            if abs(matrix[i, i].defuzzify(method=consistency_method) - identity_one.defuzzify(method=consistency_method)) > tolerance:
+            if abs(matrix[i, i].defuzzify(method=consistency_method) - identity_one.defuzzify(method=consistency_method)) > final_tolerance:
                 errors.append(f"Diagonal element at ({i},{i}) is not 1. Found: {matrix[i,i]}")
         return errors
 
     @staticmethod
-    def validate_matrix_reciprocity(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float = 1e-9) -> List[str]:
+    def validate_matrix_reciprocity(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float | None = None) -> List[str]:
         """Validates the reciprocal property a_ji = 1/a_ij for the entire matrix."""
+        final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
         errors = []
         n = matrix.shape[0]
         for i in range(n):
@@ -190,7 +196,7 @@ class Validation:
                     inverse_val = matrix[j, i].inverse()
                     val = matrix[i, j]
                     # Compare the defuzzified centroids for a stable check
-                    if abs(val.defuzzify(method=consistency_method) - inverse_val.defuzzify(method=consistency_method)) > tolerance:
+                    if abs(val.defuzzify(method=consistency_method) - inverse_val.defuzzify(method=consistency_method)) > final_tolerance:
                         errors.append(f"Reciprocity failed between ({i},{j}) and ({j},{i}). "
                                       f"Value: {val}, Inverse of counterpart: {inverse_val}")
                 except Exception as e:
@@ -198,15 +204,17 @@ class Validation:
         return errors
 
     @staticmethod
-    def run_all_matrix_validations(matrix: np.ndarray, consistency_method: str = "centroid", expected_size: int | None = None, tolerance: float = 1e-9) -> Dict[str, List[str]]:
+    def run_all_matrix_validations(matrix: np.ndarray, consistency_method: str = "centroid", expected_size: int | None = None, tolerance: float | None = None) -> Dict[str, List[str]]:
         """Runs a complete suite of validations on a single comparison matrix."""
+        final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
         all_errors = {"dimensions": [], "diagonal": [], "reciprocity": []}
         all_errors["dimensions"] = Validation.validate_matrix_dimensions(matrix, expected_size)
 
         # Only run further checks if dimensions are valid
         if not all_errors["dimensions"]:
-            all_errors["diagonal"] = Validation.validate_matrix_diagonal(matrix, tolerance=tolerance, consistency_method=consistency_method)
-            all_errors["reciprocity"] = Validation.validate_matrix_reciprocity(matrix, tolerance=tolerance, consistency_method=consistency_method)
+            all_errors["diagonal"] = Validation.validate_matrix_diagonal(matrix, tolerance=final_tolerance, consistency_method=consistency_method)
+            all_errors["reciprocity"] = Validation.validate_matrix_reciprocity(matrix, tolerance=final_tolerance, consistency_method=consistency_method)
         return all_errors
 
     @staticmethod

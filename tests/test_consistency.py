@@ -170,21 +170,21 @@ def test_check_model_with_consistent_matrix():
     Tests that the model check correctly identifies a matrix as consistent
     when its CR is below a standard threshold.
     """
-    consistent_matrix = np.array([
-        [Crisp(1), Crisp(1/4), Crisp(4)],
+    perfectly_consistent_matrix = np.array([
+        [Crisp(1), Crisp(0.25), Crisp(2.25)],
         [Crisp(4), Crisp(1), Crisp(9)],
-        [Crisp(1/4), Crisp(1/9), Crisp(1)]
+        [Crisp(1/2.25), Crisp(1/9), Crisp(1)]
     ], dtype=object)
 
     goal_node = Node("Goal", "Test Goal")
     model = Hierarchy[Crisp](goal_node, number_type=Crisp)
     for name in ["C1", "C2", "C3"]:
         goal_node.add_child(Node(name))
-    model.set_comparison_matrix("Goal", consistent_matrix)
+    model.set_comparison_matrix("Goal", perfectly_consistent_matrix)
 
     results = Consistency.check_model_consistency(model, saaty_cr_threshold=0.1)
+    print(results["Goal"])
 
-    # More robust assertions
     assert "Goal" in results
     assert "is_consistent" in results["Goal"]
     assert results["Goal"]["is_consistent"] == True

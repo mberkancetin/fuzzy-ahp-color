@@ -11,6 +11,18 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .types import TFN, TrFN, Crisp, GFN, NumericType, Number
 
+try:
+    import pandas as pd
+    _PANDAS_AVAILABLE = True
+except ImportError:
+    _PANDAS_AVAILABLE = False
+
+def _check_pandas_availability():
+    """Helper function to raise an error if pandas is not installed."""
+    if not _PANDAS_AVAILABLE:
+        raise ImportError("Excel/CSV export functionality requires the 'pandas' and 'openpyxl' libraries. "
+                        "Please install them using: pip install pandas openpyxl")
+
 
 class Node(Generic[Number]):
     """
@@ -52,17 +64,12 @@ class Node(Generic[Number]):
         Recursively calculates the global weights for this node's children.
         Assumes its own global_weight has already been set.
         """
-        # The logic is now focused only on the children.
         for child in self.children:
             if self.global_weight is None or child.local_weight is None:
                 raise ValueError(f"Cannot calculate global weight for '{child.id}', as parent or local weight is missing.")
 
-            # This will now be TFN * TFN or Crisp * Crisp, which works.
             child.global_weight = self.global_weight * child.local_weight
-
-            # Recurse down the tree
             child.calculate_global_weights()
-
 
     def get_all_leaf_nodes(self) -> List[Node[Number]]:
         """
@@ -75,6 +82,57 @@ class Node(Generic[Number]):
         for child in self.children:
             leaves.extend(child.get_all_leaf_nodes())
         return leaves
+
+    def judgments_to_table(
+        self,
+        group_matrices: List[np.ndarray] | None = None,
+        source_names: List[str] | None = None,
+        consistency_method: str | None = 'centroid'
+    ) -> 'pd.DataFrame':
+        """
+        Exports the comparison judgments for this node's children to a pandas DataFrame.
+
+        - If `group_matrices` is provided, it will format the data in the
+          flattened "Pairs" style, showing each source's judgment.
+        - If `group_matrices` is NOT provided, it will format the node's own
+          `comparison_matrix` into a classic n x n table.
+
+        Args:
+            group_matrices (optional): A list of matrices from multiple experts/sources.
+                                        If None, uses the node's own comparison_matrix.
+            source_names (optional): A list of names for each expert/source.
+            consistency_method (optional): If provided, defuzzifies fuzzy numbers.
+
+        Returns:
+            A pandas DataFrame of the judgments.
+        """
+        from .visualization import format_group_judgments_as_table, format_matrix_as_table
+        _check_pandas_availability()
+
+        if self.is_leaf:
+            if not hasattr(self, 'model'):
+                raise RuntimeError("Node must be part of a Hierarchy to find alternative names.")
+            item_names = [alt.name for alt in self.model.alternatives]
+        else:
+            item_names = [child.id for child in self.children]
+
+        if group_matrices:
+            # User provided multiple matrices, so use the flattened group format
+            return format_group_judgments_as_table(
+                matrices=group_matrices,
+                item_names=item_names,
+                source_names=source_names,
+                consistency_method=consistency_method
+            )
+        else:
+            # No group matrices provided, so format this node's single matrix
+            if self.comparison_matrix is None:
+                raise ValueError(f"Node '{self.id}' has no comparison_matrix set.")
+            return format_matrix_as_table(
+                matrix=self.comparison_matrix,
+                item_names=item_names,
+                consistency_method=consistency_method
+            )
 
 
 class Alternative(Generic[Number]):

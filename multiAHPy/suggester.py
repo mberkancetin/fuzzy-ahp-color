@@ -86,7 +86,7 @@ class MethodSuggester:
 
         recipe = {}
 
-        # --- Step 1: Suggest Number Type ---
+        # --- Suggest Number Type ---
         if fuzzy_number_preference == "simple":
             recipe['number_type'] = TFN
         elif fuzzy_number_preference == "interval_certainty":
@@ -96,15 +96,15 @@ class MethodSuggester:
         else:
             recipe['number_type'] = TFN # Safe default
 
-        # --- Step 2: Suggest Aggregation Method ---
+        # --- Suggest Aggregation Method ---
         if not is_group_decision:
-            recipe['aggregation_method'] = None # No aggregation needed
+            recipe['aggregation_method'] = None
         else:
             if recipe['number_type'] == IFN:
                 recipe['aggregation_method'] = 'ifwa'
             else:
                 if aggregation_goal == "average":
-                    recipe['aggregation_method'] = 'geometric' # Recommended over arithmetic
+                    recipe['aggregation_method'] = 'geometric'
                 elif aggregation_goal == "robust_to_outliers":
                     recipe['aggregation_method'] = 'median'
                 elif aggregation_goal == "envelope":
@@ -112,7 +112,7 @@ class MethodSuggester:
                 elif aggregation_goal == "consensus":
                     recipe['aggregation_method'] = 'median'
 
-        # --- Step 3: Suggest Weight Derivation Method ---
+        # --- Suggest Weight Derivation Method ---
         if recipe['number_type'] == IFN:
              recipe['weight_derivation_method'] = 'geometric_mean'
              print("Guidance: For IFN, also consider using 'aggregate_priorities_ifwa' for group decisions.")
@@ -124,7 +124,7 @@ class MethodSuggester:
             elif weight_derivation_goal == "consistency_focused_crisp":
                 recipe['weight_derivation_method'] = 'fuzzy_programming'
 
-        # --- Step 4: Suggest Defuzzification Method ---
+        # --- Suggest Defuzzification Method ---
         if recipe['number_type'] == IFN:
             recipe['consistency_method'] = 'score'
         else:

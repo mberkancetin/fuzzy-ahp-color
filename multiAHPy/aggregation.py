@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List, Type, TYPE_CHECKING, Callable
 import numpy as np
+from .config import configure_parameters
 
 if TYPE_CHECKING:
     from .types import NumericType, Number, TFN, TrFN, IFN, IT2TrFN
@@ -33,7 +34,8 @@ def aggregate_matrices(
     matrices: List[np.ndarray],
     method: str = "geometric",
     expert_weights: List[float] | None = None,
-    number_type: Type[NumericType] | None = None
+    number_type: Type[NumericType] | None = None,
+    tolerance: float | None = None
 ) -> np.ndarray:
     """
     Aggregates a list of expert judgment matrices into a single group matrix.
@@ -82,6 +84,8 @@ def aggregate_matrices(
     else:
         number_type_to_use = number_type
 
+    final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
     num_matrices = len(matrices)
     first_matrix = matrices[0]
     n = first_matrix.shape[0]
@@ -98,7 +102,7 @@ def aggregate_matrices(
         if len(expert_weights) != num_matrices:
             raise ValueError("Number of expert weights must match the number of matrices.")
         weight_sum = sum(expert_weights)
-        if abs(weight_sum) < 1e-9:
+        if abs(weight_sum) < final_tolerance:
             raise ValueError("Sum of expert weights cannot be zero.")
         weights = [w / weight_sum for w in expert_weights]
 
@@ -138,7 +142,6 @@ def _aggregate_geometric(matrices: List[np.ndarray], n: int, number_type: Type[I
 @register_aggregation_method('TrFN', 'arithmetic')
 @register_aggregation_method('Crisp', 'arithmetic')
 def _aggregate_arithmetic(matrices: List[np.ndarray], n: int, number_type: Type[IFN], weights: List[float]) -> np.ndarray:
-
     from .matrix_builder import create_comparison_matrix
     aggregated_matrix = create_comparison_matrix(n, number_type)
     for i in range(n):
@@ -186,7 +189,6 @@ def _aggregate_min_max(matrices: List[np.ndarray], n: int, number_type: Type[IFN
             l_values = [getattr(m[i, j], components[0]) for m in matrices]
             u_values = [getattr(m[i, j], components[-1]) for m in matrices]
 
-            # Find min of lower, mean of middle(s), max of upper
             agg_l, agg_u = min(l_values), max(u_values)
 
             if len(components) == 4: # TrFN case
@@ -259,6 +261,7 @@ def _aggregate_ifn_consensus(matrices: List[np.ndarray], n: int, number_type: Ty
 def _aggregate_priorities_ifowa_operator(
     priorities: List[IFN],
     ordered_weights: List[float] | None = None,
+    tolerance: float | None = None,
     **kwargs
 ) -> IFN:
     """
@@ -277,21 +280,21 @@ def _aggregate_priorities_ifowa_operator(
     if not priorities:
         raise ValueError("Priority list cannot be empty.")
 
-    # Step 1: Sort the priorities in descending order
+    final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
     sorted_priorities = sorted(priorities, reverse=True)
 
-    # Step 2: Validate and normalize the ordered weights
     if ordered_weights is None:
         weights = [1.0 / num_priorities] * num_priorities
     else:
         if len(ordered_weights) != num_priorities:
             raise ValueError(f"Number of ordered weights ({len(ordered_weights)}) must match number of priorities ({num_priorities}).")
         weight_sum = sum(ordered_weights)
-        if abs(weight_sum) < 1e-9:
+        if abs(weight_sum) < final_tolerance:
              raise ValueError("Sum of ordered weights cannot be zero.")
         weights = [w / weight_sum for w in ordered_weights]
 
-    # Step 3: Apply the IFWA formula to the *sorted* priorities
+    # Apply the IFWA formula to the *sorted* priorities
     prod_1_minus_mu = np.prod([(1 - p.mu) ** w for p, w in zip(sorted_priorities, weights)])
     prod_nu = np.prod([p.nu ** w for p, w in zip(sorted_priorities, weights)])
 
@@ -346,7 +349,8 @@ def _aggregate_priorities_ifha_operator(
 def aggregate_priorities(
     matrices: List[np.ndarray],
     method: str = "geometric_mean",
-    expert_weights: List[float] | None = None
+    expert_weights: List[float] | None = None,
+    tolerance: float | None = None
 ) -> np.ndarray:
     """
     Aggregates priorities by first calculating individual weight vectors for each
@@ -370,23 +374,18 @@ def aggregate_priorities(
     if not matrices:
         raise ValueError("Matrix list cannot be empty.")
 
-    # --- Step 1: Calculate Individual Priority Vectors ---
-    from .weight_derivation import derive_weights # Local import to avoid circular dependency
+    final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
+    from .weight_derivation import derive_weights
 
     individual_crisp_weights = []
     for matrix in matrices:
         number_type = type(matrix[0, 0])
-        # Derive weights for the current matrix
         results = derive_weights(matrix, number_type, method=method)
-        # We need the crisp weights for aggregation
         individual_crisp_weights.append(results['crisp_weights'])
 
-    # We now have a list of weight vectors, e.g., [[0.6, 0.4], [0.7, 0.3]]
-    # Convert to a 2D NumPy array for easier computation: (num_experts x num_criteria)
     weights_matrix = np.array(individual_crisp_weights)
 
-    # --- Step 2: Aggregate the Priority Vectors ---
-    # Validate and normalize expert weights
     num_experts = len(matrices)
     if expert_weights is None:
         weights = np.full(num_experts, 1.0 / num_experts)
@@ -394,21 +393,18 @@ def aggregate_priorities(
         if len(expert_weights) != num_experts:
             raise ValueError("Number of expert weights must match the number of matrices.")
         weight_sum = sum(expert_weights)
-        if abs(weight_sum) < 1e-9:
+        if abs(weight_sum) < final_tolerance:
             raise ValueError("Sum of expert weights cannot be zero.")
         weights = np.array(expert_weights) / weight_sum
 
-    # --- Step 3: Calculate the Weighted Average ---
-    # Use np.average with the 'weights' parameter for a clean, weighted average.
-    # axis=0 calculates the average down each column (for each criterion).
     final_group_priorities = np.average(weights_matrix, axis=0, weights=weights)
 
-    # Final normalization to ensure it sums perfectly to 1
     return final_group_priorities / np.sum(final_group_priorities)
 
 def aggregate_priorities_ifwa(
     priorities: List[IFN],
-    expert_weights: List[float] | None = None
+    expert_weights: List[float] | None = None,
+    tolerance: float | None = None
 ) -> IFN:
     """
     Aggregates a list of Intuitionistic Fuzzy Numbers (IFNs) using the
@@ -432,19 +428,18 @@ def aggregate_priorities_ifwa(
         raise ValueError("Priority list cannot be empty for aggregation.")
 
     if expert_weights is None:
-        # If no weights are provided, assume all experts are equal.
         weights = [1.0 / num_priorities] * num_priorities
     else:
-        # If weights are provided, validate them.
         if len(expert_weights) != num_priorities:
             raise ValueError(f"The number of expert weights provided ({len(expert_weights)}) "
                              f"must match the number of priorities ({num_priorities}).")
 
+        final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
         weight_sum = sum(expert_weights)
-        if abs(weight_sum) < 1e-9:
+        if abs(weight_sum) < final_tolerance:
              raise ValueError("The sum of expert weights cannot be zero.")
 
-        # Normalize weights so they sum to 1.
         weights = [w / weight_sum for w in expert_weights]
 
     # Formula for IFWA:
@@ -455,6 +450,5 @@ def aggregate_priorities_ifwa(
     agg_mu = 1 - prod_1_minus_mu
     agg_nu = prod_nu
 
-    # Import locally to avoid potential circular dependencies if this file is imported elsewhere
     from .types import IFN
     return IFN(agg_mu, agg_nu)

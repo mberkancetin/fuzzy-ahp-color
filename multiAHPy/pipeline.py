@@ -5,7 +5,6 @@ from .model import Hierarchy, Node
 from .types import NumericType
 from .aggregation import aggregate_matrices
 
-# Define the two main workflows
 WorkflowType = Literal["ranking", "scoring"]
 
 class Workflow:
@@ -67,7 +66,6 @@ class Workflow:
         self.rankings: List[Tuple[str, float]] | None = None
         self.consistency_report: Dict[str, Any] | None = None
 
-        # Internally, the pipeline manages its own Hierarchy model
         self.model = Hierarchy(root_node, number_type=recipe['number_type'])
         for alt_name in alternatives:
             self.model.add_alternative(alt_name)
@@ -95,13 +93,12 @@ class Workflow:
         """
         print(f"--- Running AHP Workflow: '{self.workflow_type}' ---")
 
-        # --- Step 1: Aggregate Matrices (if multiple experts) ---
         aggregated_data = {}
         aggregation_method = self.recipe.get('aggregation_method', 'geometric')
 
         if expert_matrices:
             for node_id, matrices in expert_matrices.items():
-                if len(matrices) > 1:
+                if len(matrices) > 1: # Aggregate if there are group of matrices
                     print(f"  - Aggregating {len(matrices)} matrices for node '{node_id}' using '{aggregation_method}'...")
                     agg_matrix = aggregate_matrices(
                         matrices,
@@ -113,7 +110,6 @@ class Workflow:
                 elif matrices:
                     aggregated_data[node_id] = matrices[0]
 
-        # --- Step 2: Set data on the model ---
         for node_id, matrix in aggregated_data.items():
             node = self.model._find_node(node_id)
             if not node:
@@ -124,12 +120,8 @@ class Workflow:
             else:
                 self.model.set_comparison_matrix(node_id, matrix)
 
-        # --- Step 3: Run the core AHP calculations in the correct order ---
-
-        # 3.1: Calculate criteria weights (required for both workflows)
         self.model.calculate_weights(method=self.recipe['weight_derivation_method'])
 
-        # 3.2: Calculate final scores based on the workflow type
         if self.workflow_type == 'ranking':
             if not expert_matrices:
                 raise ValueError("The 'ranking' workflow requires the 'expert_matrices' argument.")
@@ -138,14 +130,12 @@ class Workflow:
         elif self.workflow_type == 'scoring':
             if not performance_scores:
                 raise ValueError("The 'scoring' workflow requires the 'performance_scores' argument.")
-            # Set the performance scores on the alternatives
             for alt_name, scores in performance_scores.items():
                 alt_obj = self.model.get_alternative(alt_name)
                 for leaf_id, score in scores.items():
                     alt_obj.set_performance_score(leaf_id, score)
             self.model.score_alternatives_by_performance()
 
-        # --- Step 4: Finalize results ---
         self.rankings = self.model.get_rankings()
         self.consistency_report = self.model.check_consistency()
 
