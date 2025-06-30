@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 
-A flexible, object-oriented Python library for performing both classical and Fuzzy Analytic Hierarchy Process (AHP). This toolkit is designed for researchers, data scientists, and decision-makers who need a robust and extensible framework for solving complex multi-criteria decision problems, especially in group settings.
+A flexible, object-oriented Python library for performing both classical and Fuzzy Analytic Hierarchy Process (AHP). This toolkit is designed for researchers, data scientists, and decision-makers who require a robust, reproducible, and highly extensible tool for complex multi-criteria decision problems.
 
 Its generic, protocol-based system allows it to seamlessly handle various numeric types, from crisp numbers to different fuzzy representations like **Triangular (TFN)**, **Trapezoidal (TrFN)**, **Intuitionistic (IFN)**, and more. This makes it a powerful tool for modeling the ambiguity and subjectivity inherent in human judgment.
 
@@ -18,6 +18,8 @@ Its core strength is a **"plug-and-play" architecture** built on registries and 
 - **Generic & Type-Safe**: Easily switch between **Classical AHP (`Crisp`)** and **Fuzzy AHP (`TFN`, `TrFN`, etc.)** by changing a single type parameter.
 - **Multi-Level Hierarchy**: Build complex decision models with unlimited criteria and sub-criteria levels using an intuitive `Node`-based structure.
 - **Fully Extensible Architecture**: Easily register custom algorithms and parameters. Add your own weight derivation methods, consistency indices, aggregation techniques, or even custom fuzzy number types.
+- **From Advice to Action**: The built-in MethodSuggester generates a complete, ready-to-use `recipe` of parameters for the chosen research design, ensuring methodological consistency.
+- **Multiple Workflows**: The library provides clear, purpose-built `pipeline` to prevent common errors for both ranking a fixed set of alternatives (classic AHP) or using AHP as a weighting engine for a performance index.
 - **Centralized Configuration**: Modify global parameters like Saaty's RI values, consistency thresholds, or fuzzy scales in a single configuration object (multiAHPy.configure_parameters) for easy customization and replication of studies.
 - **Group Decision Support**: Aggregate judgments from multiple experts using standard methods like **Geometric Mean** or advanced techniques like **Intuitionistic Fuzzy Weighted Averaging (IFWA)**.
 - **Multiple Derivation & Consistency Methods**: Implements a wide range of academically-cited algorithms:
@@ -53,11 +55,16 @@ This is the heart of the library's flexibility. Any number class (like `Crisp`, 
 ### `Registries` Customization
 Dictionaries that map names (e.g., `geometric_mean`) to functions. This allows for the "plug-and-play" architecture for methods.
 
+## Streamlined `Pipelines`
+With the combination of `recipe` method suggestion and `Workflow` class to define an entire analysis upfront, preventing common errors like skipping steps or using incompatible methods.
+
 
 ### Modules
 - **`model`**: Core classes (`Hierarchy`, `Node`, `Alternative`).
 - **`types`**: All supported number types (`Crisp`, `TFN`, `TrFN`, `IFN`, etc.) and the underlying `NumericType` protocol.
 - **`config`**: A global configuration object holding all adjustable parameters like `SAATY_RI_VALUES` and `GCI_THRESHOLDS`.
+- **`pipeline`**: The main entry point to create `Workflow` for running a full analysis.
+- **`suggester`**: Helps generate method recipes (`get_model_recipe`) for your workflow.
 - **`matrix_factory`**: Tools for creating comparison matrices from user input, including the `FuzzyScale` class.
 - **`aggregation`**: Functions for group decision-making, like `aggregate_matrices` and `aggregate_priorities`.
 - **`weight_derivation`**: The algorithms for calculating priority weights from matrices.
