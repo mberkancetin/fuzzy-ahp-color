@@ -102,7 +102,7 @@ class Node(Generic[Number]):
         self,
         group_matrices: List[np.ndarray] | None = None,
         source_names: List[str] | None = None,
-        consistency_method: str | None = 'centroid'
+        consistency_method: str | None = None
     ) -> 'pd.DataFrame':
         """
         Exports the comparison judgments for this node's children to a pandas DataFrame.
@@ -368,6 +368,54 @@ class Hierarchy(Generic[Number]):
         alt.node_scores[node.id] = total_score
 
         return total_score
+
+# In multiAHPy/model.py, inside the Hierarchy class
+
+    # ... (after your other methods like calculate_weights, etc.) ...
+
+    def get_criteria_weights(
+        self, as_dict: bool = True,
+        defuzzify: bool = True,
+        consistency_method: str = "centroid"
+        ) -> Dict[str, float] | List[Node]:
+        """
+        Returns the final global weights of all leaf-node criteria.
+
+        This is the primary output when using AHP as a weighting engine. It should
+        be called after `calculate_weights()`.
+
+        Args:
+            as_dict (bool, optional): If True (default), returns a dictionary of
+                                      { 'node_id': crisp_weight }.
+                                      If False, returns the list of leaf Node objects.
+            defuzzify (bool, optional): If True (default) and as_dict is True,
+                                        the weights in the dictionary will be
+                                        crisp float values. If False, they will
+                                        be the fuzzy number objects.
+
+        Returns:
+            A dictionary of weights or a list of Node objects.
+        """
+        if self.root.global_weight is None:
+            raise RuntimeError("Weights have not been calculated yet. Call `calculate_weights()` first.")
+
+        leaf_nodes = self.root.get_all_leaf_nodes()
+
+        if not as_dict:
+            return leaf_nodes
+
+        defuzz_method = consistency_method
+        weights_dict = {}
+        for leaf in leaf_nodes:
+            if leaf.global_weight is None:
+                raise RuntimeError(f"Global weight for leaf node '{leaf.id}' is missing.")
+
+            if defuzzify:
+                weights_dict[leaf.id] = leaf.global_weight.defuzzify(method=defuzz_method)
+            else:
+                weights_dict[leaf.id] = leaf.global_weight
+
+        return weights_dict
 
     def score_alternatives_by_performance(self):
         """

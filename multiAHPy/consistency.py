@@ -8,6 +8,17 @@ if TYPE_CHECKING:
     from .model import Hierarchy, Node
     from .types import NumericType, Number, TFN
 
+try:
+    import pandas as pd
+    _PANDAS_AVAILABLE = True
+except ImportError:
+    _PANDAS_AVAILABLE = False
+
+def _check_pandas_availability():
+    if not _PANDAS_AVAILABLE:
+        raise ImportError("This feature requires the 'pandas' library. Please install it using: pip install pandas")
+
+
 CONSISTENCY_METHODS: Dict[str, Callable] = {}
 
 def register_consistency_method(
@@ -40,6 +51,7 @@ def register_consistency_method(
         }
         return func
     return decorator
+
 
 class Consistency:
     """
@@ -279,6 +291,71 @@ class Consistency:
         traverse(model.root)
 
         return results_aggregator
+
+    @staticmethod
+    def check_group_consistency(
+        model_template: Hierarchy,
+        expert_matrices: Dict[str, List[np.ndarray]],
+        **kwargs
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Checks the consistency for each expert's set of matrices individually.
+
+        This is primarily used for the 'Aggregation of Individual Priorities' (AIP)
+        workflow, where each expert's consistency should be assessed before
+        aggregating their final priorities.
+
+        Args:
+            model_template: A template Hierarchy object (with structure but no data)
+                            to be copied for each expert.
+            expert_matrices: A dictionary mapping node IDs to a list of matrices,
+                             one matrix per expert.
+            **kwargs: Additional arguments to pass to check_model_consistency
+                      (e.g., saaty_cr_threshold).
+
+        Returns:
+            A pandas DataFrame summarizing the consistency results for each
+            expert and each of their matrices.
+        """
+        _check_pandas_availability()
+
+        num_experts = len(list(expert_matrices.values())[0])
+        all_results = []
+
+        for i in range(num_experts):
+            from copy import deepcopy
+            expert_model = deepcopy(model_template)
+
+            for node_id, matrices in expert_matrices.items():
+                node = expert_model._find_node(node_id)
+                if not node: continue
+
+                if node.is_leaf:
+                    expert_model.set_alternative_matrix(node_id, matrices[i])
+                else:
+                    expert_model.set_comparison_matrix(node_id, matrices[i])
+
+            consistency_report = Consistency.check_model_consistency(expert_model, **kwargs)
+
+            for node_id, metrics in consistency_report.items():
+                record = {
+                    "Expert": f"Expert {i+1}",
+                    "Node": node_id,
+                    "CR": metrics.get("saaty_cr"),
+                    "CR Status": metrics.get("saaty_cr_status"),
+                    "GCI": metrics.get("gci"),
+                    "GCI Status": metrics.get("gci_check_status"),
+                    "Is Consistent": metrics.get("is_consistent")
+                }
+                all_results.append(record)
+
+        if not all_results:
+            return {"Info": "No matrices were provided to check consistency."}
+
+        all_results['CR'] = [f"{x:.4f}" if isinstance(x, float) else x for x in all_results['CR']]
+        all_results['GCI'] = [f"{x:.4f}" if isinstance(x, float) else x for x in all_results['GCI']]
+
+        return all_results
 
     @staticmethod
     def get_consistency_recommendations(model: Hierarchy, inconsistent_node_id: str, consistency_method: str = 'centroid') -> List[str]:

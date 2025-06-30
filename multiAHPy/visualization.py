@@ -73,8 +73,12 @@ def _render_expandable_node(
             try:
                 model = node.get_model()
                 details_html += f"<li><b>Number Type:</b> {model.number_type.__name__}</li>"
-                details_html += f"<li><b>Weight Derivation:</b> {getattr(model, 'last_used_derivation_method', 'N/A')}</li>"
                 details_html += f"<li><b>Alternatives:</b> {len(model.alternatives)}</li>"
+                details_html += f"<li><b>Weight Derivation:</b> {getattr(model, 'last_used_derivation_method', 'N/A')}</li>"
+                if getattr(model, 'last_used_aggregation_method', 'N/A'):
+                    details_html += f"<li><b>Aggregation Method:</b> {getattr(model, 'last_used_aggregation_method', 'N/A')}</li>"
+                if getattr(model, 'last_used_ranking_defuzz_method', 'N/A'):
+                    details_html += f"<li><b>Defuzzification Method:</b> {getattr(model, 'last_used_ranking_defuzz_method', 'N/A')}</li>"
             except (RuntimeError, AttributeError) as e:
                 details_html += f"<li>Error getting model details: {e}</li>"
 

@@ -1,80 +1,142 @@
-# New user workflow in run_custom_test.py
+# tests/test_suggester.py
 
+import pytest
 import multiAHPy as ahp
 from multiAHPy.model import Node
-from multiAHPy.types import TFN
-from multiAHPy.matrix_builder import create_matrix_from_list
+from multiAHPy.pipeline import Workflow
+from multiAHPy.types import TFN, TrFN, IFN
 
-# --- 1. Define the Problem Structure ---
-# Hierarchy
-goal_node = Node("Select Best Car")
-crit_price = Node("Price")
-crit_safety = Node("Safety")
-goal_node.add_child(crit_price)
-goal_node.add_child(crit_safety)
-# Alternatives
-alternatives = ["Car A", "Car B", "Car C"]
+# ==============================================================================
+# 1. FIXTURES
+# ==============================================================================
 
-# --- 2. Get a Recipe for the Analysis ---
-# We want a simple, robust analysis
-recipe = ahp.suggester.get_model_recipe(
-    fuzzy_number_preference="simple",
-    aggregation_goal="average",
-    weight_derivation_goal="stable_and_simple"
-)
-number_type = recipe["number_type"]
+@pytest.fixture
+def basic_hierarchy():
+    """Provides a simple, reusable hierarchy structure for tests."""
+    goal = Node("Goal")
+    goal.add_child(Node("Criterion 1"))
+    goal.add_child(Node("Criterion 2"))
+    return goal
 
-from multiAHPy.types import IFN
-# number_type = IFN
-recipe_manual = {
-    'number_type': number_type,
-    'aggregation_method': 'ifwa',
-    'weight_derivation_method': 'geometric_mean',
-    'consistency_method': 'value'
- }
+@pytest.fixture
+def basic_alternatives():
+    """Provides a simple list of alternative names."""
+    return ["Option A", "Option B"]
 
-# --- 3. Create and Configure the Pipeline ---
-# Let's do a classic ranking workflow
-pipeline = ahp.Workflow(
-    root_node=goal_node,
-    workflow_type="ranking",
-    recipe=recipe,
-    # workflow_type="scoring",
-    # recipe=recipe_manual,
-    alternatives=alternatives
-)
+# ==============================================================================
+# 2. TESTS FOR suggester
+# ==============================================================================
 
-# --- 4. Provide the Data ---
-# Judgments from two experts
-# Expert 1
-e1_crit = create_matrix_from_list([3], number_type)
-e1_price = create_matrix_from_list([5, 2, 2/5], number_type)
-e1_safety = create_matrix_from_list([1/4, 1/2, 2], number_type)
-# Expert 2
-e2_crit = create_matrix_from_list([2], number_type)
-e2_price = create_matrix_from_list([4, 3, 3/4], number_type)
-e2_safety = create_matrix_from_list([1/3, 1/3, 1], number_type)
+def test_suggester_get_available_options():
+    """
+    Tests that the suggester can report its available options correctly.
+    """
+    options = ahp.suggester.get_available_options()
+    assert "fuzzy_number_preference" in options
+    assert "simple" in options["fuzzy_number_preference"]
+    assert "hesitation" in options["fuzzy_number_preference"]
+    assert "aggregation_goal" in options
 
-# Structure the data for the pipeline
-expert_data = {
-    "Select Best Car": [e1_crit, e2_crit], # Criteria matrix
-    "Price": [e1_price, e2_price],         # Alternative matrix for Price
-    "Safety": [e1_safety, e2_safety]       # Alternative matrix for Safety
-}
+def test_suggester_simple_average_recipe():
+    """
+    Tests the default recipe for a simple average model.
+    """
+    recipe = ahp.suggester.get_model_recipe(
+        fuzzy_number_preference="simple",
+        aggregation_goal="average",
+        weight_derivation_goal="stable_and_simple"
+    )
 
-# --- 5. Run the Pipeline ---
-pipeline.run(expert_matrices=expert_data)
+    assert recipe['number_type'] == TFN
+    assert recipe['aggregation_method'] == 'geometric'
+    assert recipe['weight_derivation_method'] == 'geometric_mean'
+    assert recipe['consistency_method'] == 'centroid'
 
-root_node = pipeline.model.root
+def test_suggester_robust_recipe():
+    """
+    Tests the recipe generation for a robust model that handles outliers.
+    """
+    recipe = ahp.suggester.get_model_recipe(
+        fuzzy_number_preference="interval_certainty",
+        aggregation_goal="robust_to_outliers",
+        weight_derivation_goal="true_fuzzy"
+    )
 
-# Get the judgments for the criteria comparisons from multiple experts
-criteria_judgments_table = root_node.judgments_to_table()
+    assert recipe['number_type'] == TrFN
+    assert recipe['aggregation_method'] == 'median'
+    assert recipe['weight_derivation_method'] == 'lambda_max'
 
-print(criteria_judgments_table)
+def test_suggester_ifn_recipe():
+    """
+    Tests the recipe generation specifically for an IFN-based model.
+    """
+    recipe = ahp.suggester.get_model_recipe(
+        fuzzy_number_preference="hesitation",
+        aggregation_goal="consensus" # Should suggest ifwa for IFN
+    )
 
-# --- 6. Access the Results ---
-print("\nFinal Rankings from Pipeline:")
-print(pipeline.rankings)
+    assert recipe['number_type'] == IFN
+    assert recipe['aggregation_method'] == 'ifwa'
+    assert recipe['consistency_method'] == 'score'
 
-print("\nConsistency Report from Pipeline:")
-print(pipeline.consistency_report)
+def test_suggester_invalid_input():
+    """
+    Tests that the suggester raises a ValueError for invalid preference strings.
+    """
+    with pytest.raises(ValueError, match="Invalid fuzzy_number_preference"):
+        ahp.suggester.get_model_recipe(fuzzy_number_preference="invalid_choice")
+
+    with pytest.raises(ValueError, match="Invalid aggregation_goal"):
+        ahp.suggester.get_model_recipe(aggregation_goal="invalid_choice")
+
+
+# ==============================================================================
+# 3. TESTS FOR PIPELINE INITIALIZATION USING SUGGESTER RECIPES
+# ==============================================================================
+
+def test_pipeline_initialization_with_tfn_recipe(basic_hierarchy, basic_alternatives):
+    """
+    Tests creating a pipeline with a TFN-based recipe.
+    This directly validates the fix for the previous collection error.
+    """
+    recipe = ahp.suggester.get_model_recipe(fuzzy_number_preference="simple")
+
+    try:
+        pipeline = Workflow(
+            root_node=basic_hierarchy,
+            workflow_type="scoring",
+            group_strategy="aggregate_judgments",
+            recipe=recipe,
+            alternatives=basic_alternatives
+        )
+    except Exception as e:
+        pytest.fail(f"Pipeline initialization failed with TFN recipe: {e}")
+
+    assert isinstance(pipeline, Workflow)
+    assert pipeline.model.number_type == TFN
+    assert pipeline.recipe['number_type'] == TFN
+    assert len(pipeline.model.alternatives) == 2
+    assert pipeline.model.alternatives[0].name == "Option A"
+
+
+def test_pipeline_initialization_with_ifn_recipe(basic_hierarchy, basic_alternatives):
+    """
+    Tests creating a pipeline with an IFN-based recipe.
+    """
+    recipe = ahp.suggester.get_model_recipe(fuzzy_number_preference="hesitation")
+
+    try:
+        pipeline = Workflow(
+            root_node=basic_hierarchy,
+            workflow_type="ranking",
+            group_strategy="aggregate_priorities",
+            recipe=recipe,
+            alternatives=basic_alternatives
+        )
+    except Exception as e:
+        pytest.fail(f"Pipeline initialization failed with IFN recipe: {e}")
+
+    assert isinstance(pipeline, Workflow)
+    assert pipeline.model.number_type == IFN
+    assert pipeline.recipe['number_type'] == IFN
+    assert pipeline.group_strategy == "aggregate_priorities"
