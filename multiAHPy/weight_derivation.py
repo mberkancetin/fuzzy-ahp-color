@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import List, Type, Dict, Any, TYPE_CHECKING
 import numpy as np
 import math
+import warnings
 
 if TYPE_CHECKING:
     from .types import NumericType, Number, TFN, Crisp, IFN, IT2TrFN
@@ -69,6 +70,8 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
     Returns:
         A list of derived weights of the specified number_type.
     """
+    from .config import configure_parameters
+
     n = matrix.shape[0]
 
     row_geo_means = []
@@ -79,7 +82,7 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
         row_geo_means.append(row_product.power(1.0 / n))
 
     total_sum = sum(row_geo_means, number_type.neutral_element())
-    if abs(total_sum.defuzzify(method=consistency_method)) < 1e-9:
+    if abs(total_sum.defuzzify(method=consistency_method)) < configure_parameters.FLOAT_TOLERANCE:
         return [number_type.neutral_element() for _ in range(n)]
 
     sum_inverse = total_sum.inverse()
@@ -87,16 +90,14 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
     return weights
 
 @register_weight_method('Crisp', 'eigenvector')
-def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], max_iter=20, tol=1e-6) -> List[Number]:
+def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], **kwargs) -> List[Number]:
     """
-    Derives weights using the principal eigenvector method (Power Iteration).
+    Derives weights using the principal right eigenvector of the matrix.
     This implementation is for CRISP matrices only.
 
     Args:
         matrix: A crisp comparison matrix.
         number_type: Must be the Crisp class.
-        max_iter: Maximum iterations for convergence.
-        tol: Tolerance for convergence.
 
     Returns:
         A list of crisp weights.
@@ -105,25 +106,14 @@ def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], max_iter=20
         raise TypeError("Standard eigenvector method is only applicable to crisp matrices.")
 
     n = matrix.shape[0]
-    # Extract float values from Crisp objects
-    from .types import Crisp
-    crisp_matrix = np.array([[Crisp(cell) for cell in row] for row in matrix])
-    crisp_matrix = np.array([[cell.value for cell in row] for row in crisp_matrix])
+    crisp_matrix = np.array([[cell.value for cell in row] for row in matrix])
 
-    # Power method to find the principal eigenvector
-    weights = np.ones(n)
-    for _ in range(max_iter):
-        weights_new = crisp_matrix @ weights
-        weights_new /= np.linalg.norm(weights_new) # Normalize vector
-        if np.allclose(weights, weights_new, atol=tol):
-            break
-        weights = weights_new
-
-    # Final normalization so weights sum to 1
+    eigenvalues, eigenvectors = np.linalg.eig(crisp_matrix)
+    max_eig_index = np.argmax(eigenvalues)
+    weights = np.real(eigenvectors[:, max_eig_index])
     normalized_weights = weights / np.sum(weights)
-
-    # Return as a list of Crisp objects
     return [number_type(w) for w in normalized_weights]
+
 
 # ==============================================================================
 # 3. FUZZY-SPECIFIC AHP ALGORITHMS
@@ -145,9 +135,21 @@ def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[s
         method's mathematical properties differ from traditional AHP. It is
         presented here due to its historical significance and widespread use.
 
+    .. warning::
+        This method is widely cited but has been academically criticized for
+        several issues, including the potential to assign a zero weight to a
+        non-zero criterion and its mathematical properties differing from
+        classical AHP. Use with caution and consider more robust methods
+        like 'geometric_mean'. See Liu, Y. et al. (2020) for a discussion.
+
     Returns:
         A dictionary containing weights, crisp_weights, possibility_matrix, etc.
     """
+    warnings.warn(
+        "Extent Analysis (EAM) is a 'problematic' method according to recent reviews (e.g., Liu et al., 2020). It may produce zero weights incorrectly. Consider using 'geometric_mean' for more robust results.",
+        UserWarning
+    )
+
     n = matrix.shape[0]
     if not hasattr(matrix[0,0], 'possibility_degree'):
         raise TypeError("Extent analysis requires TFNs with 'possibility_degree' method.")
@@ -184,7 +186,7 @@ def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[s
 
 @register_weight_method('TFN', 'llsm')
 @register_weight_method('TrFN', 'llsm')
-def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components: List[str]) -> List[Number]:
+def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components: List[str], epsilon: float | None = None) -> List[Number]:
     """
     Derives weights using a generic Fuzzy Logarithmic Least Squares Method (LLSM).
     This method is applied component-wise to a fuzzy number.
@@ -197,11 +199,13 @@ def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components:
     Returns:
         A list of derived fuzzy weights.
     """
+    from .config import configure_parameters
+    final_epsilon = epsilon if epsilon is not None else configure_parameters.LOG_EPSILON
+
     n = matrix.shape[0]
 
-    # Helper function to apply LLSM to a single crisp component matrix
     def llsm_component(component_matrix: np.ndarray) -> np.ndarray:
-        component_matrix = np.where(component_matrix == 0, 1e-10, component_matrix)
+        component_matrix = np.where(component_matrix == 0, final_epsilon, component_matrix)
         log_matrix = np.log(component_matrix)
         # The original formula uses geometric mean of columns, which is equivalent
         # to the arithmetic mean of the log of rows.
@@ -209,7 +213,6 @@ def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components:
         weights = np.exp(row_means)
         return weights / np.sum(weights)
 
-    # Calculate weights for each component
     component_weights = {}
     for comp_name in components:
         comp_matrix = np.array([[getattr(cell, comp_name) for cell in row] for row in matrix])
@@ -218,17 +221,13 @@ def fuzzy_llsm_method(matrix: np.ndarray, number_type: Type[Number], components:
     fuzzy_weights = []
     for i in range(n):
         weight_params = [component_weights[comp_name][i] for comp_name in components]
-
-        # Ensure the parameters are in the correct order for the constructor (l<=m<=u)
         sorted_params = sorted(weight_params)
-
-        # Instantiate the fuzzy number object
         fuzzy_weights.append(number_type(*sorted_params))
 
     return fuzzy_weights
 
 @register_weight_method('TFN', 'lambda_max')
-@register_weight_method('TrFN', 'llsm')
+@register_weight_method('TrFN', 'lambda_max')
 def lambda_max_method(matrix: np.ndarray, number_type: Type[Number]) -> List[Number]:
     """
     Derives fuzzy weights using the Lambda-max method by Csutora and Buckley (2001).
@@ -295,6 +294,8 @@ def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN], **kw
         weight vector that is "most consistent" with the original fuzzy judgments.
         The resulting lambda (λ) is a direct measure of consistency (λ > 0 is good).
     """
+    from .config import configure_parameters
+
     _check_scipy_availability()
     n = matrix.shape[0]
 
@@ -327,7 +328,7 @@ def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN], **kw
             constraints.append({'type': 'ineq', 'fun': lambda x, i=i, j=j, u=u, m=m: -((u - m) * x[-1] * x[j] + x[i] - u * x[j])})
 
     # Bounds: w_i > 0 and λ >= 0
-    bounds = [(1e-9, None)] * n + [(0, None)]
+    bounds = [(configure_parameters.FLOAT_TOLERANCE, None)] * n + [(0, None)]
 
     result = minimize(objective, initial_guess, method='SLSQP', bounds=bounds, constraints=constraints)
     if not result.success:
@@ -349,6 +350,7 @@ def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN], **kw
         "optimization_success": result.success,
         "optimization_message": result.message
     }
+
 
 # ==============================================================================
 # 4. THE PRIMARY DISPATCHER FUNCTION

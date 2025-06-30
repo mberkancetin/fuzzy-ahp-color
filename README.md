@@ -17,8 +17,8 @@ Its core strength is a **"plug-and-play" architecture** built on registries and 
 
 - **Generic & Type-Safe**: Easily switch between **Classical AHP (`Crisp`)** and **Fuzzy AHP (`TFN`, `TrFN`, etc.)** by changing a single type parameter.
 - **Multi-Level Hierarchy**: Build complex decision models with unlimited criteria and sub-criteria levels using an intuitive `Node`-based structure.
-**Fully Extensible Architecture**: Easily register custom algorithms and parameters. Add your own weight derivation methods, consistency indices, aggregation techniques, or even custom fuzzy number types.
-**Centralized Configuration**: Modify global parameters like Saaty's RI values, consistency thresholds, or fuzzy scales in a single configuration object (multiAHPy.configure_parameters) for easy customization and replication of studies.
+- **Fully Extensible Architecture**: Easily register custom algorithms and parameters. Add your own weight derivation methods, consistency indices, aggregation techniques, or even custom fuzzy number types.
+- **Centralized Configuration**: Modify global parameters like Saaty's RI values, consistency thresholds, or fuzzy scales in a single configuration object (multiAHPy.configure_parameters) for easy customization and replication of studies.
 - **Group Decision Support**: Aggregate judgments from multiple experts using standard methods like **Geometric Mean** or advanced techniques like **Intuitionistic Fuzzy Weighted Averaging (IFWA)**.
 - **Multiple Derivation & Consistency Methods**: Implements a wide range of academically-cited algorithms:
   - **Weight Derivation**: Geometric Mean, Chang's Extent Analysis, Mikhailov's Fuzzy Programming.

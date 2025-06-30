@@ -258,7 +258,6 @@ class TFN:
 
     def inverse(self) -> TFN:
         """Return the inverse of the TFN."""
-        # Ensure none of the values are zero to avoid division by zero
         if self.l <= 0:
             raise ValueError("Cannot invert a TFN with non-positive values")
         return TFN(1.0/self.u, 1.0/self.m, 1.0/self.l)
@@ -278,7 +277,6 @@ class TFN:
     def power(self, exponent: float) -> TFN:
         return self.__pow__(exponent)
 
-    # Utility methods
     def to_array(self):
         """Convert to NumPy array."""
         return np.array([self.l, self.m, self.u])
@@ -300,17 +298,20 @@ class TFN:
 
         return np.sqrt((d_l + d_m + d_u) / 3.0)
 
-    def possibility_degree(self, other: TFN) -> float:
+    def possibility_degree(self, other: TFN, tolerance: float | None = None) -> float:
         """
         Calculate the possibility degree that self >= other.
         V(self >= other), used in Chang's extent analysis method.
         """
+        from .config import configure_parameters
+        final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
         if self.m >= other.m:
             return 1.0
         if other.l >= self.u:
             return 0.0
         denominator = (self.m - self.u) - (other.m - other.l)
-        if abs(denominator) < 1e-9:
+        if abs(denominator) < final_tolerance:
             return 1.0
         return (other.l - self.u) / denominator
 
@@ -452,7 +453,6 @@ class TrFN:
 
     def alpha_cut(self, alpha: float) -> tuple[float, float]:
         if not (0 <= alpha <= 1): raise ValueError("Alpha must be between 0 and 1.")
-        # Similar logic for a trapezoid
         lower = self.a + alpha * (self.b - self.a)
         upper = self.d - alpha * (self.d - self.c)
         return lower, upper
@@ -497,7 +497,7 @@ class IFN:
         mu, nu = float(mu), float(nu)
         if not (0 <= mu <= 1 and 0 <= nu <= 1):
             raise ValueError("Membership (mu) and non-membership (nu) must be between 0 and 1.")
-        if round(mu + nu, 9) > 1.0: # Use round to handle float precision issues
+        if round(mu + nu, 9) > 1.0:
             raise ValueError(f"Sum of membership and non-membership must not exceed 1, but mu+nu={mu+nu}.")
         self.mu = mu
         self.nu = nu
@@ -509,13 +509,13 @@ class IFN:
     def _get_other_as_ifn(self, other: Union[IFN, Crisp, float]) -> IFN:
         """Helper to convert other types to IFN for operations."""
         if isinstance(other, IFN): return other
-        # A crisp number has no hesitation, so ν = 1 - μ
+        # A crisp number has no hesitation, so
+        # ν = 1 - μ
         val = other.value if hasattr(other, 'value') else float(other)
         if not (0 <= val <= 1):
             raise ValueError("Cannot perform arithmetic with crisp value outside [0,1] against an IFN.")
         return IFN(mu=val, nu=1-val)
 
-    # --- Arithmetic Operations ---
     def __add__(self, other: IFN) -> IFN:
         if not isinstance(other, IFN): return NotImplemented
         return IFN(
@@ -535,8 +535,6 @@ class IFN:
     # Returning NotImplemented is the correct, safe approach.
     def __sub__(self, other): return NotImplemented
     def __truediv__(self, other): return NotImplemented
-
-    # --- Reflected and Scalar Operations ---
     def __radd__(self, other): return self.__add__(other)
     def __rmul__(self, other): return self.__mul__(other)
     def __rsub__(self, other): return NotImplemented
@@ -570,7 +568,6 @@ class IFN:
 
     def __lt__(self, other: IFN) -> bool:
         if not isinstance(other, IFN): return NotImplemented
-        # Standard comparison rule for IFNs
         if self.defuzzify(method="score") < other.defuzzify(method="score"):
             return True
         elif self.defuzzify(method="score") == other.defuzzify(method="score"):
@@ -580,6 +577,13 @@ class IFN:
     def inverse(self) -> IFN:
         """The inverse (or complement) of an IFN is (ν, μ)."""
         return IFN(mu=self.nu, nu=self.mu)
+
+    def hesitancy(self) -> float:
+        """
+        Returns the hesitancy degree (π = 1 - μ - ν), also known as the
+        intuitionistic fuzzy index. A higher value indicates more uncertainty.
+        """
+        return self.pi
 
     @staticmethod
     def neutral_element() -> IFN:
@@ -694,7 +698,7 @@ class GFN:
         return self.__mul__(other)
 
     def __truediv__(self, other: Union[GFN, Crisp, float]) -> GFN:
-        # Division is very complex; this is a simplified approximation.
+        # This is a simplified approximation.
         o = self._get_other_as_gfn(other)
         if o.m == 0:
             raise ZeroDivisionError("Approximate division by a GFN with mean zero is unstable.")
@@ -707,7 +711,7 @@ class GFN:
         return o / self
 
     def __pow__(self, exponent: float) -> GFN:
-        # This is a simplification; true power of a GFN is complex.
+        # This is a simplification.
         return GFN(self.m ** exponent, self.sigma * exponent)
 
     def __eq__(self, other: object) -> bool:
@@ -784,7 +788,6 @@ class IT2TrFN:
     _defuzzify_methods: Dict[str, Callable] = {}
 
     def __init__(self, umf: TrFN, lmf: TrFN):
-        # Validate that LMF is "inside" UMF
         if not (umf.a <= lmf.a and umf.b <= lmf.b and lmf.c <= umf.c and lmf.d <= umf.d):
             raise ValueError('LMF must be contained within the UMF')
         self.umf = umf # Upper Trapezoid
@@ -793,7 +796,6 @@ class IT2TrFN:
     def __repr__(self) -> str:
         return f"IT2TrFN(UMF={self.umf}, LMF={self.lmf})"
 
-    # --- Arithmetic Operations (Applied to both UMF and LMF) ---
     def __add__(self, other: IT2TrFN) -> IT2TrFN:
         if not isinstance(other, IT2TrFN): return NotImplemented
         return IT2TrFN(
@@ -818,16 +820,13 @@ class IT2TrFN:
     def __pow__(self, exponent: float) -> IT2TrFN:
         return self.power(exponent)
 
-    # Reflected and other operators
     def __radd__(self, other): return self.__add__(other)
     def __rmul__(self, other): return self.__mul__(other)
-    # Subtraction and Division are complex for IT2FS and are omitted.
     def __sub__(self, other): return NotImplemented
     def __rsub__(self, other): return NotImplemented
     def __truediv__(self, other): return NotImplemented
     def __rtruediv__(self, other): return NotImplemented
 
-    # --- Comparison (Based on the average of the defuzzified UMF and LMF) ---
     def __eq__(self, other: object) -> bool:
         if isinstance(other, IT2TrFN):
             return self.umf == other.umf and self.lmf == other.lmf
@@ -837,7 +836,6 @@ class IT2TrFN:
         if not isinstance(other, IT2TrFN): return NotImplemented
         return self.defuzzify() < other.defuzzify()
 
-    # --- Protocol Utility Methods ---
     def inverse(self) -> IT2TrFN:
         return IT2TrFN(umf=self.umf.inverse(), lmf=self.lmf.inverse())
 
@@ -882,8 +880,6 @@ class IT2TrFN:
             print(f"Warning: Overwriting defuzzify method '{name}' for {cls.__name__}")
         cls._defuzzify_methods[name] = func
 
-
-# Picture Fuzzy Sets
 
 # ==============================================================================
 # 3. GENERIC TYPE VARIABLE

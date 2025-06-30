@@ -50,7 +50,8 @@ class FuzzyScale:
             An instance of the specified fuzzy number type.
         """
         if scale not in configure_parameters.FUZZY_TFN_SCALES:
-            raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_tfn_scales()}")
+            if scale not in configure_parameters.FUZZY_IFN_SCALES:
+                raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_tfn_scales()}")
 
         if not isinstance(crisp_value, (int, float)):
             raise TypeError("Crisp judgment must be a number.")
@@ -88,7 +89,8 @@ class FuzzyScale:
         elif type_name == 'GFN':
             params = (value, value * (fuzziness / 10.0))
         elif type_name == 'IFN':
-            params = configure_parameters.FUZZY_IFN_SCALES[value]
+            scale = "nyugen"
+            params = configure_parameters.FUZZY_IFN_SCALES[scale][value]
         elif type_name == 'IT2TrFN':
             l, m, u = configure_parameters.FUZZY_TFN_SCALES[scale][abs(crisp_value)]
 
@@ -120,11 +122,16 @@ def _get_matrix_size_from_list_len(num_judgments: int) -> int:
     Raises:
         ValueError: If the number of judgments does not correspond to a valid matrix.
     """
-    # The formula for the number of pairs k in an n x n matrix is k = n*(n-1)/2
-    # Rearranging this gives a quadratic equation: n^2 - n - 2k = 0
-    # We solve for n using the quadratic formula: n = (-b ± sqrt(b^2 - 4ac)) / 2a
-    # Here, a=1, b=-1, c=-2k
+    # The formula for the number of pairs k in an n x n matrix is
+    # k = n*(n-1)/2
 
+    # Rearranging this gives a quadratic equation:
+    # n^2 - n - 2k = 0
+
+    # We solve for n using the quadratic formula:
+    # n = (-b ± sqrt(b^2 - 4ac)) / 2a
+    
+    # Here, a=1, b=-1, c=-2k
     discriminant = 1 - (4 * 1 * (-2 * num_judgments))
     if discriminant < 0:
         raise ValueError(f"Invalid number of judgments ({num_judgments}). Cannot form a square matrix.")
@@ -197,18 +204,19 @@ def create_comparison_matrix(size: int, number_type: Type[Number]) -> np.ndarray
 
     return matrix
 
-def complete_matrix_from_upper_triangle(matrix: np.ndarray, consistency_method: str = "centroid") -> np.ndarray:
+def complete_matrix_from_upper_triangle(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float | None = None) -> np.ndarray:
     """Fills the lower triangle using reciprocals of the upper triangle."""
+    final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
+
     n = matrix.shape[0]
     completed_matrix = matrix.copy()
     identity_val = matrix[0,0].multiplicative_identity().defuzzify(method=consistency_method)
 
     for i in range(n):
         for j in range(i + 1, n):
-            # Check if the upper-triangle element has been changed from its default identity value
-            if abs(completed_matrix[i, j].defuzzify(method=consistency_method) - identity_val) > 1e-9:
+            if abs(completed_matrix[i, j].defuzzify(method=consistency_method) - identity_val) > final_tolerance:
                 completed_matrix[j, i] = completed_matrix[i, j].inverse()
-            elif abs(completed_matrix[j, i].defuzzify(method=consistency_method) - identity_val) > 1e-9:
+            elif abs(completed_matrix[j, i].defuzzify(method=consistency_method) - identity_val) > final_tolerance:
                  completed_matrix[i, j] = completed_matrix[j, i].inverse()
     return completed_matrix
 

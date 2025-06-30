@@ -53,7 +53,7 @@ def sample_tfn_model() -> Hierarchy:
     sub_crit_judgments = {("Purchase Price", "Maintenance"): 3}
     sub_crit_matrix = create_matrix_from_judgments(sub_crit_judgments, sub_criteria_cost, TFN)
     model.set_comparison_matrix("Cost", sub_crit_matrix)
-    
+
     # Judgments for alternatives under each leaf criterion
     alt_vs_purchase_price = {("Option A", "Option B"): 1/4} # Option B is better on price
     alt_vs_maintenance = {("Option A", "Option B"): 1/2} # Option B is better on maintenance
@@ -158,7 +158,7 @@ def test_calculate_alternative_scores(sample_tfn_model):
     assert alt_a.overall_score is None
 
     # Run score calculation (this is the method being tested)
-    sample_tfn_model.calculate_alternative_scores()
+    sample_tfn_model.rank_alternatives_by_comparison()
 
     # After calculation, scores should be populated
     assert isinstance(alt_a.overall_score, TFN)
@@ -167,7 +167,7 @@ def test_calculate_alternative_scores(sample_tfn_model):
 def test_get_rankings(sample_tfn_model):
     """Test that get_rankings produces a sorted list of tuples."""
     sample_tfn_model.calculate_weights()
-    sample_tfn_model.calculate_alternative_scores()
+    sample_tfn_model.rank_alternatives_by_comparison()
 
     rankings = sample_tfn_model.get_rankings()
 
