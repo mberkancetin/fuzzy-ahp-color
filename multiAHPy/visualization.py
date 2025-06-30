@@ -50,23 +50,9 @@ def _render_expandable_node(
     Renders a single, generic, expandable node box, now including consistency info.
     """
     body_id = 'node-body-' + str(uuid.uuid4())[:8]
-
-    if is_root:
-        try:
-            model = node.get_model()
-
-            details_html += f"<li><b>Number Type:</b> {model.number_type.__name__}</li>"
-            details_html += f"<li><b>Weight Derivation:</b> {model.last_used_derivation_method or 'N/A'}</li>"
-            details_html += f"<li><b>Defuzzification (for ranking):</b> {model.last_used_ranking_defuzz_method or 'N/A'}</li>"
-            details_html += f"<li><b>Alternatives:</b> {len(model.alternatives)}</li>"
-            details_html += f"<li><b>Aggregation (Group):</b> {model.last_used_aggregation_method or 'N/A'}</li>"
-        except (RuntimeError, AttributeError) as e:
-            details_html += f"<li>Error getting model details: {e}</li>"
-
-        header_text = f"Goal: {node.id}"
-    # --- Prepare details for the expandable body ---
     details_html = "<ul>"
-    if is_alt: # Alternative Node
+
+    if is_alt:
         score_val = alt_obj.overall_score
         score_str = f"{score_val.defuzzify(method=consistency_method):.4f}" if score_val is not None else 'Not Calculated'
         details_html += f"<li><b>Final Score:</b> {score_str}</li>"
@@ -79,35 +65,42 @@ def _render_expandable_node(
                 else:
                     details_html += f"<li>{leaf_id}: {score:.3f}</li>"
             details_html += "</ul></li>"
-    else:
-        local_w_str = f"{node.local_weight.defuzzify(method=consistency_method):.3f}" if node.local_weight else 'N/A'
-        global_w_str = f"{node.global_weight.defuzzify(method=consistency_method):.4f}" if node.global_weight else 'N/A'
-        parent_id_str = node.parent.id if node.parent else 'None'
-        details_html += f"<li><b>Description:</b> {node.description or 'N/A'}</li>"
-        details_html += f"<li><b>Parent:</b> {parent_id_str}</li>"
-        details_html += f"<li><b>Local Weight:</b> {local_w_str}</li>"
-        details_html += f"<li><b>Global Weight:</b> {global_w_str}</li>"
 
-        # Check if consistency data exists for this specific node
-        if consistency_data and node.id in consistency_data:
-            cons_info = consistency_data[node.id]
-            cr_val = cons_info['saaty_cr']
-            gci_val = cons_info['gci']
+        header_text = alt_obj.name
 
-            # Use colors to indicate consistency status
-            cr_color = 'color: #2e7d32;' if cons_info.get('is_consistent_cr', True) else 'color: #c62828; font-weight: bold;'
-            gci_color = 'color: #2e7d32;' if cons_info.get('is_consistent_gci', True) else 'color: #c62828; font-weight: bold;'
+    else: # Criterion or Goal Node
+        if is_root:
+            try:
+                model = node.get_model()
+                details_html += f"<li><b>Number Type:</b> {model.number_type.__name__}</li>"
+                details_html += f"<li><b>Weight Derivation:</b> {getattr(model, 'last_used_derivation_method', 'N/A')}</li>"
+                details_html += f"<li><b>Alternatives:</b> {len(model.alternatives)}</li>"
+            except (RuntimeError, AttributeError) as e:
+                details_html += f"<li>Error getting model details: {e}</li>"
 
-            details_html += "<li><b>Consistency:</b><ul>"
-            details_html += f"<li>Saaty's CR: <span style='{cr_color}'>{cr_val:.4f}</span></li>"
-            details_html += f"<li>GCI: <span style='{gci_color}'>{gci_val:.4f}</span></li>"
-            if "mikhailov_lambda" in cons_info and cons_info["mikhailov_lambda"] != "N/A":
-                details_html += f"<li>Mikhailov λ: {cons_info['mikhailov_lambda']}</li>"
-            details_html += "</ul></li>"
+            header_text = f"Goal: {node.id}"
+        else:
+            local_w_str = f"{node.local_weight.defuzzify(method=consistency_method):.3f}" if node.local_weight else 'N/A'
+            global_w_str = f"{node.global_weight.defuzzify(method=consistency_method):.4f}" if node.global_weight else 'N/A'
+            parent_id_str = node.parent.id if node.parent else 'None'
+
+            details_html += f"<li><b>Description:</b> {node.description or 'N/A'}</li>"
+            details_html += f"<li><b>Parent:</b> {parent_id_str}</li>"
+            details_html += f"<li><b>Local Weight:</b> {local_w_str}</li>"
+            details_html += f"<li><b>Global Weight:</b> {global_w_str}</li>"
+
+            if consistency_data and node.id in consistency_data:
+                cons_info = consistency_data[node.id]
+                details_html += "<li><b>Consistency:</b><ul>"
+                for name, value in cons_info.items():
+                    if 'status' in name or 'threshold' in name or name in ['matrix_size', 'is_consistent']:
+                        continue
+                    details_html += f"<li>{name.replace('_', ' ').title()}: {value}</li>"
+                details_html += "</ul></li>"
+
+            header_text = node.id
 
     details_html += "</ul>"
-
-    header_text = alt_obj.name if is_alt else node.id
 
     return f"""
     <div class="ahp-node" onclick="toggleAHPNode('{body_id}', event)">
