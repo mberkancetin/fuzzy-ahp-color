@@ -208,6 +208,10 @@ class Consistency:
             model: The Hierarchy instance to check.
             **kwargs: Additional arguments to pass down to calculation functions,
                       e.g., `consistency_method='centroid'` or `saaty_cr_threshold=0.2`.
+
+        Returns:
+            A dictionary where keys are node IDs and values are a detailed
+            dictionary of all calculated consistency metrics.
         """
         results_aggregator = {}
 
