@@ -55,7 +55,7 @@ This is the heart of the library's flexibility. Any number class (like `Crisp`, 
 ### `Registries` Customization
 Dictionaries that map names (e.g., `geometric_mean`) to functions. This allows for the "plug-and-play" architecture for methods.
 
-## Streamlined `Pipelines`
+### Streamlined `Pipelines`
 With the combination of `recipe` method suggestion and `Workflow` class to define an entire analysis upfront, preventing common errors like skipping steps or using incompatible methods.
 
 

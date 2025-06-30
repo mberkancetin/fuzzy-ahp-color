@@ -52,16 +52,18 @@ def _render_expandable_node(
     body_id = 'node-body-' + str(uuid.uuid4())[:8]
 
     if is_root:
-        model = node.get_model()
+        try:
+            model = node.get_model()
 
-        details_html += f"<li><b>Number Type:</b> {model.number_type.__name__}</li>"
-        details_html += f"<li><b>Weight Derivation:</b> {model.last_used_derivation_method or 'N/A'}</li>"
-        details_html += f"<li><b>Defuzzification (for ranking):</b> {model.last_used_ranking_defuzz_method or 'N/A'}</li>"
-        details_html += f"<li><b>Alternatives:</b> {len(model.alternatives)}</li>"
-        details_html += f"<li><b>Aggregation (Group):</b> {model.last_used_aggregation_method or 'N/A'}</li>"
+            details_html += f"<li><b>Number Type:</b> {model.number_type.__name__}</li>"
+            details_html += f"<li><b>Weight Derivation:</b> {model.last_used_derivation_method or 'N/A'}</li>"
+            details_html += f"<li><b>Defuzzification (for ranking):</b> {model.last_used_ranking_defuzz_method or 'N/A'}</li>"
+            details_html += f"<li><b>Alternatives:</b> {len(model.alternatives)}</li>"
+            details_html += f"<li><b>Aggregation (Group):</b> {model.last_used_aggregation_method or 'N/A'}</li>"
+        except (RuntimeError, AttributeError) as e:
+            details_html += f"<li>Error getting model details: {e}</li>"
 
         header_text = f"Goal: {node.id}"
-
     # --- Prepare details for the expandable body ---
     details_html = "<ul>"
     if is_alt: # Alternative Node
@@ -134,6 +136,12 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None, cons
     """
     from IPython.display import display, HTML
     from .consistency import Consistency
+
+    try:
+        if model.root.children and model.root.children[0].local_weight is None:
+             model.calculate_weights()
+    except Exception as e:
+         print(f"Warning: Could not auto-calculate weights for display. Run `model.calculate_weights()` first. Error: {e}")
 
     try:
         if model.root.global_weight is None: model.calculate_weights()
@@ -836,7 +844,6 @@ def format_matrix_as_table(
 
     df = pd.DataFrame(table_data, index=item_names, columns=item_names)
     return df
-
 
 def format_group_judgments_as_table(
     matrices: List[np.ndarray],
