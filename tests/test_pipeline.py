@@ -119,7 +119,7 @@ def test_pipeline_scoring_with_aggregate_judgments(hierarchy_structure, alternat
     pipeline.fit_weights(expert_matrices={"Goal": tfn_expert_matrices["Goal"]})
 
     # Step 2: Rank/score using the performance data
-    pipeline.rank(performance_scores=performance_score_data)
+    pipeline.score(performance_scores=performance_score_data)
 
     # --- Assertions ---
     assert pipeline.criteria_weights != None
@@ -147,14 +147,25 @@ def test_pipeline_ranking_with_aggregate_priorities(hierarchy_structure, alterna
         alternatives=alternatives_list
     )
 
+
+    alternative_matrices_for_rank = {
+        "Price": tfn_expert_matrices["Price"],
+        "Quality": tfn_expert_matrices["Quality"]
+    }
+
+    # Let's assume you have a separate list for expert weights, or None
+    expert_weights_list = [0.6, 0.4] # or None
+
     # --- Execute the pipeline ---
     # The .rank() method for AIP in a 'ranking' workflow requires the full set of
     # expert matrices for both criteria and alternatives.
     # Note: For AIP, there is no separate "fit_weights" step. The entire
     # process is done within the .rank() method.
     pipeline.fit_weights(expert_matrices={"Goal": tfn_expert_matrices["Goal"]})
-    pipeline.rank(alternative_matrices=tfn_expert_matrices)
-
+    pipeline.rank(
+        alternative_matrices=alternative_matrices_for_rank,
+        expert_weights=expert_weights_list
+    )
     # --- Assertions ---
 
     # 1. Check that the final rankings were produced and have the correct format
@@ -209,7 +220,7 @@ def test_pipeline_scoring_with_aggregate_priorities(hierarchy_structure, alterna
     pipeline.fit_weights(expert_matrices={"Goal": tfn_expert_matrices["Goal"]})
 
     # Step 2: Score using performance data
-    pipeline.rank(performance_scores=performance_score_data)
+    pipeline.score(performance_scores=performance_score_data)
 
     # --- Assertions ---
     assert pipeline.criteria_weights != None
@@ -239,15 +250,16 @@ def test_pipeline_error_on_missing_data(hierarchy_structure, alternatives_list):
         alternatives=alternatives_list
     )
 
-    # Try to rank without fitting weights first
-    with pytest.raises(RuntimeError, match="Weights have not been fitted yet"):
-        pipeline.rank(performance_scores=performance_score_data)
-
-    # Fit weights, then try to rank with missing performance scores
-    pipeline.fit_weights(expert_matrices={"Goal": [create_matrix_from_list([2], TFN)]})
     import re
-    with pytest.raises(ValueError, match=re.escape("The 'scoring' workflow requires the 'performance_scores' argument.")):
-        pipeline.rank()
+    # Try to score without fitting weights first
+    with pytest.raises(RuntimeError, match=re.escape("Must call .fit_weights() before .score()")):
+        pipeline.score(performance_scores=performance_score_data)
+
+    # Fit weights, then try to score with missing performance scores
+    pipeline.fit_weights(expert_matrices={"Goal": [create_matrix_from_list([2], TFN)]})
+
+    with pytest.raises(ValueError, match=re.escape("The 'scoring' workflow requires the 'performance_scores' argument to be provided to the .score() method.")):
+        pipeline.score()
 
 
 def test_pipeline_scoring_with_aggregate_priorities2(hierarchy_structure, alternatives_list, tfn_expert_matrices, performance_score_data):
@@ -279,3 +291,54 @@ def test_pipeline_scoring_with_aggregate_priorities2(hierarchy_structure, altern
     assert pipeline.rankings != None
     assert len(pipeline.rankings) == 3
     assert pipeline.rankings[0][0] == "Car A" # Based on the data, Car A should win
+
+
+
+def test_pipeline_ranking_workflow(hierarchy_structure, alternatives_list):
+    """
+    Tests the full 'ranking' workflow, which uses pairwise comparison of alternatives.
+    """
+    # 1. Get a recipe
+    recipe = ahp.suggester.get_model_recipe(fuzzy_number_preference="simple")
+
+    # 2. Create the pipeline, specifying the 'ranking' workflow
+    pipeline = ahp.Workflow(
+        root_node=hierarchy_structure,
+        workflow_type="ranking", # <-- This is critical
+        recipe=recipe,
+        alternatives=["Car A", "Car B"]
+    )
+
+    # 3. Provide the necessary data for the 'ranking' workflow.
+    # This includes matrices for criteria AND matrices for alternatives under each leaf.
+
+    # Let's assume the hierarchy is Goal -> [Price, Quality]
+    # And alternatives are [Car A, Car B]
+
+    # Matrix comparing Price vs. Quality
+    crit_matrix_e1 = create_matrix_from_list([3], TFN)
+
+    # Matrix comparing Car A vs. Car B FOR PRICE
+    price_alt_matrix_e1 = create_matrix_from_list([5], TFN)
+
+    # Matrix comparing Car A vs. Car B FOR QUALITY
+    quality_alt_matrix_e1 = create_matrix_from_list([1/4], TFN)
+
+    # Structure the data for the pipeline's run() method
+    expert_data = {
+        # Key is the PARENT node ID
+        "Goal": [crit_matrix_e1],
+        # Key is the LEAF node ID
+        "Price": [price_alt_matrix_e1],
+        "Quality": [quality_alt_matrix_e1]
+    }
+
+    # 4. Run the pipeline.
+    # Notice we DO NOT provide a `performance_scores` argument.
+    pipeline.run(expert_matrices=expert_data)
+
+    # 5. Assert the results
+    assert pipeline.rankings is not None
+    assert len(pipeline.rankings) == 2
+    # The `run` method should have called `fit_weights` and then `rank` internally.
+    # The final rankings are calculated from the alternative comparison matrices.

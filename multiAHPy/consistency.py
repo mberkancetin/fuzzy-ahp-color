@@ -65,12 +65,39 @@ class Consistency:
         return configure_parameters.GCI_THRESHOLDS.get(n, configure_parameters.GCI_THRESHOLDS['default'])
 
     @staticmethod
-    def _get_random_index(n: int) -> float:
-        """Retrieves the Random Consistency Index (RI) from the global config."""
+    def _get_random_index(n: int, m: int = 0) -> float:
+        """
+        Retrieves the Random Consistency Index (RI) from the global config.
+        If m > 0, it uses the generalized RI for incomplete matrices (Ágoston & Csató, 2022).
+
+        Args:
+            n: The size of the matrix.
+            m: The number of missing entries above the diagonal. If 0,
+               the standard Saaty RI is used.
+        """
+        if m > 0:
+            # Try to find the exact generalized RI value
+            val = configure_parameters.GENERALIZED_RI_VALUES.get((n, m))
+            if val is not None:
+                return val
+
+            # If not found, use the linear approximation formula as a fallback
+            if configure_parameters.USE_RI_APPROXIMATION_FALLBACK and n > 2:
+                ri_complete = configure_parameters.SAATY_RI_VALUES.get(n, configure_parameters.SAATY_RI_VALUES['default'])
+                # The formula from the paper is:
+                # RI_n,m ≈ (1 - 2m / ((n-1)(n-2))) * RI_n,0
+                denominator = (n - 1) * (n - 2)
+                if denominator > 0:
+                    return (1 - (2 * m) / denominator) * ri_complete
+
         return configure_parameters.SAATY_RI_VALUES.get(n, configure_parameters.SAATY_RI_VALUES['default'])
 
     @register_consistency_method("saaty_cr", has_threshold=True, threshold_func=_get_saaty_cr_threshold)
-    def calculate_saaty_cr(matrix: np.ndarray, consistency_method: str = 'centroid', epsilon: float | None = None) -> float:
+    def calculate_saaty_cr(
+        matrix: np.ndarray,
+        consistency_method: str = 'centroid',
+        epsilon: float | None = None,
+        num_missing_pairs: int = 0) -> float:
         """
         Calculates Saaty's traditional Consistency Ratio (CR) by first
         defuzzifying the fuzzy matrix. This is a practical approximation
@@ -84,6 +111,11 @@ class Consistency:
             heuristic to check for major inconsistencies in the defuzzified judgments.
             For rigorous academic work, consider citing literature on fuzzy consistency
             measures (e.g., based on alpha-cuts or fuzzy consistency indices).
+
+        .. note::
+            If `num_missing_pairs` > 0, this method uses the generalized Random Index
+            to account for the artificial consistency introduced by optimization-based
+            matrix completion.
 
         Args:
             matrix: The comparison matrix of NumericType objects.
@@ -127,9 +159,10 @@ class Consistency:
         if ci < 0:
             ci = 0.0
 
-        ri = Consistency._get_random_index(n)
+        ri = Consistency._get_random_index(n, num_missing_pairs)
+
         if ri <= 0:
-            return 0.0
+            return float('inf') if ci > 0 else 0.0 # Avoid division by zero
 
         return ci / ri
 
@@ -291,6 +324,9 @@ class Consistency:
         traverse(model.root)
 
         return results_aggregator
+
+
+
 
     @staticmethod
     def check_group_consistency(

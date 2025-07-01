@@ -3,6 +3,8 @@ from typing import List, Dict, Type, TYPE_CHECKING
 import numpy as np
 import math
 from .config import configure_parameters
+from .completion import complete_matrix
+from .types import Number
 
 if TYPE_CHECKING:
     from .types import NumericType, Number, TFN, IT2TrFN, TrFN, IFN, Crisp
@@ -130,7 +132,7 @@ def _get_matrix_size_from_list_len(num_judgments: int) -> int:
 
     # We solve for n using the quadratic formula:
     # n = (-b ± sqrt(b^2 - 4ac)) / 2a
-    
+
     # Here, a=1, b=-1, c=-2k
     discriminant = 1 - (4 * 1 * (-2 * num_judgments))
     if discriminant < 0:
@@ -248,3 +250,73 @@ def create_matrix_from_judgments(
         matrix[i, j] = FuzzyScale.get_fuzzy_number(value, number_type, fuzziness=fuzziness, scale=scale)
 
     return complete_matrix_from_upper_triangle(matrix)
+
+def create_completed_matrix(
+    incomplete_matrix: np.ndarray,
+    number_type: Type[Number],
+    scale: str = 'linear',
+    completion_method: str = "eigenvalue_optimization",
+    **kwargs
+) -> np.ndarray:
+    """
+    Creates a complete, type-aware comparison matrix from an incomplete one.
+
+    This function serves as a high-level wrapper. It first uses a numerical
+    algorithm to fill in the missing values and then converts the resulting
+    crisp matrix into a matrix of the desired fuzzy number type using the
+    specified scale.
+
+    Args:
+        incomplete_matrix: A square NumPy array (dtype=object) with missing
+                           values represented by `None` or `np.nan`.
+        number_type: The target number class (e.g., Crisp, TFN, IFN).
+        scale: The named scale to use for converting the completed crisp
+               judgments into fuzzy numbers (e.g., 'linear', 'wide').
+        completion_method: The underlying numerical algorithm to use for
+                           filling in missing values.
+        **kwargs: Additional arguments to pass to the completion method
+                  (e.g., max_iter, tolerance).
+
+    Returns:
+        A complete, reciprocal comparison matrix of the specified number_type.
+    """
+    print(f"\n--- Creating completed matrix (Type: {number_type.__name__}, Completion: {completion_method}) ---")
+
+    # --- Step 1: Use the numerical engine to get a completed crisp matrix ---
+    # We must convert the incomplete matrix to float first, replacing None with np.nan
+    # so that the numerical methods can handle it.
+
+    # Create a copy to work with, ensuring dtype is object to hold Nones
+    ipcm_copy = incomplete_matrix.copy().astype(object)
+
+    # Replace None with np.nan which is the standard for numerical missing values
+    ipcm_copy[ipcm_copy == None] = np.nan
+
+    # Now call the numerical completion engine
+    completed_crisp_matrix = complete_matrix(
+        incomplete_matrix=ipcm_copy,
+        method=completion_method,
+        **kwargs
+    )
+
+    # --- Step 2: Convert the completed crisp matrix to the target fuzzy type ---
+    n = completed_crisp_matrix.shape[0]
+    # Create an empty matrix to hold the new fuzzy objects
+    final_fuzzy_matrix = create_comparison_matrix(n, number_type)
+
+    # Use an iterator to fill the upper triangle
+    for i in range(n):
+        for j in range(i + 1, n):
+            crisp_value = completed_crisp_matrix[i, j]
+
+            # Use your existing FuzzyScale logic to convert the crisp value
+            # into a TFN, IFN, etc., based on the specified scale.
+            final_fuzzy_matrix[i, j] = FuzzyScale.get_fuzzy_number(
+                crisp_value,
+                number_type,
+                scale=scale
+            )
+
+    # --- Step 3: Fill the lower triangle with reciprocals ---
+    # This ensures the final matrix is perfectly reciprocal in the fuzzy sense.
+    return complete_matrix_from_upper_triangle(final_fuzzy_matrix)

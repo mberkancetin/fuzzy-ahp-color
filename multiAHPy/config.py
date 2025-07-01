@@ -1,4 +1,29 @@
-from typing import Dict, Any
+from typing import Dict, Tuple, Callable
+
+
+RI_Approximation_Func = Callable[[int, int, Dict[int, float]], float]
+
+
+def default_ri_approximation(n: int, m: int, ri_table: Dict[int, float]) -> float:
+    """
+    Calculates the generalized RI using the linear approximation from
+    Ágoston & Csató (2022), Equation (3).
+
+    Args:
+        n: Matrix size.
+        m: Number of missing pairs above the diagonal.
+        ri_table: The dictionary of standard RI values for complete matrices.
+    """
+    ri_complete = ri_table.get(n, ri_table.get('default', 1.6))
+    denominator = (n - 1) * (n - 2)
+    if denominator <= 0:
+        return 0.0 # Not applicable for n<=2
+
+    # The formula from the paper is:
+    # RI_n,m ≈ (1 - 2m / ((n-1)(n-2))) * RI_n,0
+    approximation = (1 - (2 * m) / denominator) * ri_complete
+    return max(0, approximation)
+
 
 class Configuration:
     """
@@ -31,9 +56,30 @@ class Configuration:
             'default': 1.60 # Default for n > 15
         }
 
+        # Generalized RI for INCOMPLETE matrices (RI_n,m)
+        # Source: Ágoston & Csató (2022), Table 2
+        # Keys are tuples of (matrix_size, num_missing_above_diagonal)
+        self.GENERALIZED_RI_VALUES: Dict[Tuple[int, int], float] = {
+            # n=4
+            (4, 0): 0.884, (4, 1): 0.583, (4, 2): 0.306, (4, 3): 0.053,
+            # n=5
+            (5, 0): 1.109, (5, 1): 0.925, (5, 2): 0.739, (5, 3): 0.557,
+            (5, 4): 0.379, (5, 5): 0.212, (5, 6): 0.059,
+            # n=6
+            (6, 0): 1.249, (6, 1): 1.128, (6, 2): 1.007, (6, 3): 0.883,
+            (6, 4): 0.758, (6, 5): 0.634, (6, 6): 0.510, (6, 7): 0.389,
+            (6, 8): 0.271, (6, 9): 0.161,
+            # n=7
+            (7, 0): 1.341, (7, 1): 1.256
+        }
+
+        # Linear approximation formula for RI_n,m
+        # Source: Ágoston & Csató (2022), Equation (3)
+        # This is a fallback for when a value is not in the table.
+        self.USE_RI_APPROXIMATION_FALLBACK = True
+
         # Default Saaty's CR threshold
         self.DEFAULT_SAATY_CR_THRESHOLD: float = 0.1
-
 
         # Geometric Consistency Index (GCI) thresholds
         # Source: Aguarón & Moreno-Jiménez (2003)
@@ -97,6 +143,8 @@ class Configuration:
 
         # Epsilon value to prevent log(0) errors
         self.LOG_EPSILON: float = 1e-10
+
+        self.RI_APPROXIMATION_FUNC: RI_Approximation_Func = default_ri_approximation
 
     def register_tfn_scale(self, name: str, scale_definition: Dict[int, tuple]):
         """Registers a new TFN conversion scale to the configuration."""

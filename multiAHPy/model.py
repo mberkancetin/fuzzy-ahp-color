@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple, Any, Type, Generic
 from .consistency import Consistency
 from .weight_derivation import derive_weights
 from .types import TFN, Number
+from copy import deepcopy
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -38,11 +39,11 @@ class Node(Generic[Number]):
         self.local_weight: Optional[Number] = None
         self.global_weight: Optional[Number] = None
         self.model: Optional['Hierarchy[Number]'] = None
+        self.alternative_priorities: Dict[str, float] = {}
 
     def __repr__(self) -> str:
-        local_w_str = f"{self.local_weight.defuzzify():.3f}" if self.local_weight is not None else "N/A"
-        global_w_str = f"{self.global_weight.defuzzify():.4f}" if self.global_weight is not None else "N/A"
-
+        local_w_str = f"{self.local_weight.defuzzify():.3f}" if self.local_weight else "N/A"
+        global_w_str = f"{self.global_weight.defuzzify():.4f}" if self.global_weight else "N/A"
         return (f"Node(id='{self.id}', local_weight={local_w_str}, "
                 f"global_weight={global_w_str}, children={len(self.children)})")
 
@@ -60,6 +61,24 @@ class Node(Generic[Number]):
         self.model = model
         for child in self.children:
             child._set_model_reference(model)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serializes the Node and its children to a JSON-compatible dictionary."""
+        return {
+            "id": self.id,
+            "description": self.description,
+            "children": [child.to_dict() for child in self.children]
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Node':
+        """Creates a Node instance and its descendants from a dictionary."""
+        node = cls(node_id=data['id'], description=data.get('description'))
+        if 'children' in data:
+            for child_data in data['children']:
+                child_node = cls.from_dict(child_data)
+                node.add_child(child_node)
+        return node
 
     def get_model(self) -> 'Hierarchy[Number]':
             """Returns the Hierarchy model this node belongs to."""
@@ -132,7 +151,6 @@ class Node(Generic[Number]):
             item_names = [child.id for child in self.children]
 
         if group_matrices:
-            # User provided multiple matrices, so use the flattened group format
             return format_group_judgments_as_table(
                 matrices=group_matrices,
                 item_names=item_names,
@@ -140,7 +158,6 @@ class Node(Generic[Number]):
                 consistency_method=consistency_method
             )
         else:
-            # No group matrices provided, so format this node's single matrix
             if self.comparison_matrix is None:
                 raise ValueError(f"Node '{self.id}' has no comparison_matrix set.")
             return format_matrix_as_table(
@@ -168,6 +185,18 @@ class Alternative(Generic[Number]):
         score_str = f"{self.overall_score:.4f}" if self.overall_score is not None else "N/A"
         return f"Alternative(name='{self.name}', overall_score={score_str})"
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Serializes the Alternative to a JSON-compatible dictionary."""
+        return {
+            "name": self.name,
+            "description": self.description
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Alternative':
+        """Creates an Alternative instance from a dictionary."""
+        return cls(name=data['name'], description=data.get('description'))
+
     def set_performance_score(self, leaf_node_id: str, score: float):
         """
         Sets the normalized performance score for a specific leaf node.
@@ -175,6 +204,25 @@ class Alternative(Generic[Number]):
         if not (0.0 <= score <= 1.0):
             print(f"Warning: Score for {leaf_node_id} is {score}, which is outside the typical normalized 0-1 range.")
         self.performance_scores[leaf_node_id] = score
+
+    def get_performance_score(self, leaf_node_id: str) -> float | None:
+        """Retrieves the raw performance score for a given leaf node."""
+        return self.performance_scores.get(leaf_node_id)
+
+    def get_score_at_node(self, node_id: str) -> Number | None:
+        """
+        Retrieves the calculated, synthesized score for this alternative at a
+        specific node in the hierarchy.
+
+        This represents the total weighted contribution of the branch under that node
+        to this alternative's final score.
+        """
+        return self.node_scores.get(node_id)
+
+    def clear_results(self):
+        """Resets all calculated scores for this alternative."""
+        self.node_scores.clear()
+        self.overall_score = None
 
 
 class Hierarchy(Generic[Number]):
@@ -190,6 +238,26 @@ class Hierarchy(Generic[Number]):
         self.last_used_aggregation_method: str | None = None
         self.last_used_ranking_defuzz_method: str | None = None
         self.root._set_model_reference(self)
+
+    @classmethod
+    def from_json(cls, json_string: str, number_type: Type[Number]) -> 'Hierarchy':
+        """
+        Constructs a complete Hierarchy model from a JSON string.
+
+        The JSON should define the hierarchy structure and alternatives.
+        """
+        data = json.loads(json_string)
+
+        if "hierarchy" not in data or "alternatives" not in data:
+            raise ValueError("JSON string must contain 'hierarchy' and 'alternatives' keys.")
+
+        root_node = Node.from_dict(data['hierarchy'])
+        model = cls(root_node, number_type)
+
+        for alt_data in data['alternatives']:
+            model.add_alternative(alt_data['name'], alt_data.get('description'))
+
+        return model
 
     def add_alternative(self, name: str, description: Optional[str] = None):
         """
@@ -241,18 +309,36 @@ class Hierarchy(Generic[Number]):
 
     def set_comparison_matrix(self, parent_node_id: str, matrix: np.ndarray):
         """
-        Sets the pairwise comparison matrix for the **sub-criteria** of a given parent node.
-        This method is for comparing elements at the same level of the hierarchy.
+        Sets the pairwise comparison matrix for the children of a given parent node.
+
+        This method will automatically convert the elements of the provided matrix
+        to the Hierarchy's specified `number_type` if they are not already.
         """
         parent_node = self._find_node(parent_node_id)
         if parent_node is None:
             raise ValueError(f"Node '{parent_node_id}' not found.")
         if parent_node.is_leaf:
-            raise ValueError(f"Cannot set a sub-criteria comparison matrix for a leaf node ('{parent_node_id}'). "
-                             "Use 'set_alternative_matrix' to compare alternatives for this criterion.")
+            raise ValueError(f"Cannot set a sub-criteria comparison matrix for a leaf node ('{parent_node_id}').")
         if len(parent_node.children) != matrix.shape[0]:
             raise ValueError(f"Matrix dimensions ({matrix.shape[0]}) do not match the number of children ({len(parent_node.children)}) for parent '{parent_node_id}'.")
-        parent_node.comparison_matrix = matrix
+
+        n = matrix.shape[0]
+        converted_matrix = np.empty((n, n), dtype=object)
+
+        target_type = self.number_type
+
+        for i in range(n):
+            for j in range(n):
+                cell = matrix[i, j]
+                if isinstance(cell, target_type):
+                    converted_matrix[i, j] = cell
+                else:
+                    try:
+                        converted_matrix[i, j] = target_type.from_crisp(cell)
+                    except Exception as e:
+                        raise TypeError(f"Could not convert cell at ({i},{j}) with value '{cell}' to type '{target_type.__name__}'. Error: {e}")
+
+        parent_node.comparison_matrix = converted_matrix
 
     def set_alternative_matrix(self, criterion_id: str, matrix: np.ndarray):
         """
@@ -271,7 +357,23 @@ class Hierarchy(Generic[Number]):
         if len(self.alternatives) != matrix.shape[0]:
             raise ValueError(f"Alternative matrix dimensions ({matrix.shape[0]}) do not match the number of alternatives ({len(self.alternatives)}).")
 
-        criterion_node.comparison_matrix = matrix
+        n = matrix.shape[0]
+        converted_matrix = np.empty((n, n), dtype=object)
+
+        target_type = self.number_type
+
+        for i in range(n):
+            for j in range(n):
+                cell = matrix[i, j]
+                if isinstance(cell, target_type):
+                    converted_matrix[i, j] = cell
+                else:
+                    try:
+                        converted_matrix[i, j] = target_type.from_crisp(cell)
+                    except Exception as e:
+                        raise TypeError(f"Could not convert cell at ({i},{j}) with value '{cell}' to type '{target_type.__name__}'. Error: {e}")
+
+        criterion_node.comparison_matrix = converted_matrix
 
     def calculate_weights(self, method: str = "geometric_mean"):
         """
@@ -368,10 +470,6 @@ class Hierarchy(Generic[Number]):
         alt.node_scores[node.id] = total_score
 
         return total_score
-
-# In multiAHPy/model.py, inside the Hierarchy class
-
-    # ... (after your other methods like calculate_weights, etc.) ...
 
     def get_criteria_weights(
         self, as_dict: bool = True,
@@ -494,19 +592,75 @@ class Hierarchy(Generic[Number]):
 
         return crisp_rankings
 
-    def check_consistency(self, **kwargs) -> Dict[str, Dict[str, Any]]:
+    def check_consistency(
+        self,
+        consistency_method: str = 'centroid',
+        saaty_cr_threshold: float | None = None,
+        num_missing_map: Dict[str, int] | None = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
-        Performs a comprehensive consistency check on all matrices in the model.
+        Performs a comprehensive consistency check on all matrices in the model,
+        calculating all registered consistency metrics.
 
         Args:
-            **kwargs: Can include 'consistency_method' and 'saaty_cr_threshold'.
-
+            consistency_method: The defuzzification method used for CR and GCI.
+            saaty_cr_threshold: The acceptable threshold for Saaty's CR. If None,
+                                uses the value from ahp_config.
+            num_missing_map: A dict mapping node IDs to the number of missing
+                             pairs in their matrix. Used to select the correct
+                             generalized Random Index.
         Returns:
-            A dictionary with detailed consistency results for each matrix in the model.
+            A dictionary where keys are node IDs and values are a detailed
+            dictionary of all calculated consistency metrics.
         """
-        print("\n--- Checking All Matrix Consistencies ---")
-        from .consistency import Consistency
-        return Consistency.check_model_consistency(self, **kwargs)
+        from .consistency import Consistency, CONSISTENCY_METHODS
+        from .config import configure_parameters
+
+        if num_missing_map is None:
+            num_missing_map = {}
+
+        final_cr_threshold = saaty_cr_threshold if saaty_cr_threshold is not None else configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
+
+        full_report = {}
+
+        def _traverse_and_check(node: Node):
+            if node.comparison_matrix is not None:
+                matrix = node.comparison_matrix
+                n = matrix.shape[0]
+                number_type = type(matrix[0, 0])
+                num_missing = num_missing_map.get(node.id, 0)
+                node_results = {"matrix_size": n, "num_missing_pairs": num_missing}
+
+                for name, func in CONSISTENCY_METHODS.items():
+                    try:
+                        node_results[name] = func(
+                            matrix=matrix,
+                            number_type=number_type,
+                            consistency_method=consistency_method,
+                            num_missing_pairs=num_missing
+                        )
+                    except Exception as e:
+                        node_results[name] = f"Error: {e}"
+
+                gci_threshold = Consistency._get_gci_threshold(n)
+                cr_val = node_results.get("saaty_cr", float('inf'))
+                gci_val = node_results.get("gci", float('inf'))
+
+                is_cr_ok = isinstance(cr_val, (int, float)) and cr_val <= final_cr_threshold
+                is_gci_ok = isinstance(gci_val, (int, float)) and gci_val <= gci_threshold
+
+                node_results["is_consistent"] = is_cr_ok and is_gci_ok
+                node_results["saaty_cr_threshold"] = final_cr_threshold
+                node_results["gci_threshold"] = gci_threshold
+
+                full_report[node.id] = node_results
+
+            for child in node.children:
+                _traverse_and_check(child)
+
+        _traverse_and_check(self.root)
+
+        return full_report
 
     def display(self):
         """

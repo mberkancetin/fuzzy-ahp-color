@@ -90,7 +90,7 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
     return weights
 
 @register_weight_method('Crisp', 'eigenvector')
-def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], **kwargs) -> List[Number]:
+def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], **kwargs) -> List[Crisp]:
     """
     Derives weights using the principal right eigenvector of the matrix.
     This implementation is for CRISP matrices only.
@@ -107,6 +107,13 @@ def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], **kwargs) -
 
     n = matrix.shape[0]
     crisp_matrix = np.array([[cell.value for cell in row] for row in matrix])
+
+    if isinstance(matrix[0, 0], number_type):
+        crisp_matrix = np.array([[cell.value for cell in row] for row in matrix])
+    elif isinstance(matrix[0, 0], (float, int, np.number)):
+        crisp_matrix = matrix.astype(float)
+    else:
+        raise TypeError(f"Eigenvector method received an unexpected matrix type: {type(matrix[0,0])}")
 
     eigenvalues, eigenvectors = np.linalg.eig(crisp_matrix)
     max_eig_index = np.argmax(eigenvalues)
