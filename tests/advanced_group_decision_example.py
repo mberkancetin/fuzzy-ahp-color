@@ -39,7 +39,7 @@ judgments_expert1 = {("Innovation", "Feasibility"): 2, ("Innovation", "Market Im
 judgments_expert2 = {
     ("Innovation", "Feasibility"): 3,
     ("Innovation", "Market Impact"): 1,
-    ("Feasibility", "Market Impact"): 1/2 
+    ("Feasibility", "Market Impact"): 1/2
 }
 judgments_expert3 = {("Innovation", "Feasibility"): 1/4, ("Innovation", "Market Impact"): 1, ("Feasibility", "Market Impact"): 4}
 
@@ -132,3 +132,4 @@ for i, (name, priority) in enumerate(ranked_criteria):
 print("\n--- For Comparison: Simple Weighted Average of Crisp Weights ---")
 simple_weighted_avg = np.average(expert_crisp_weights, axis=0, weights=expert_importance_weights)
 print(f"  - Simple Avg: {[f'{w:.3f}' for w in simple_weighted_avg/np.sum(simple_weighted_avg)]}")
+

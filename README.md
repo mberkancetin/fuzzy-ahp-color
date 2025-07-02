@@ -1,7 +1,7 @@
 # multiAHPy: A Flexible Python Library for Multi-Criteria Decision-Making
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 A flexible, object-oriented Python library for performing both classical and Fuzzy Analytic Hierarchy Process (AHP). This toolkit is designed for researchers, data scientists, and decision-makers who require a robust, reproducible, and highly extensible tool for complex multi-criteria decision problems.
 
@@ -15,6 +15,9 @@ Its core strength is a **"plug-and-play" architecture** built on registries and 
 
 ## Key Features
 
+- **Pipeline API**: Encapsulate your entire analysis in a reproducible `Workflow` object. Define your strategy upfront and run it with a single call, preventing common errors.
+- **Full JSON Support**: Define, configure, and run a complete AHP analysis from a single `JSON file`. Ideal for web APIs, data storage, and integration with other systems.
+- **Incomplete Matrix Completion**: Implements state-of-the-art algorithms (e.g., `Eigenvalue Optimization`, `LLSM`, `DEMATEL`) to intelligently fill in missing judgments in a pairwise comparison matrix.
 - **Generic & Type-Safe**: Easily switch between **Classical AHP (`Crisp`)** and **Fuzzy AHP (`TFN`, `TrFN`, etc.)** by changing a single type parameter.
 - **Multi-Level Hierarchy**: Build complex decision models with unlimited criteria and sub-criteria levels using an intuitive `Node`-based structure.
 - **Fully Extensible Architecture**: Easily register custom algorithms and parameters. Add your own weight derivation methods, consistency indices, aggregation techniques, or even custom fuzzy number types.
