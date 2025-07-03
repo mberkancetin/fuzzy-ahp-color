@@ -68,6 +68,13 @@ class Workflow:
         self.num_missing_in_report: Dict[str, int] = {}
         self.model = self._create_model_instance()
 
+    def display(self):
+        """
+        Displays a horizontal, column-based HTML representation of the AHP hierarchy.
+        """
+        from .visualization import display_tree_hierarchy
+        display_tree_hierarchy(self.model)
+
     @classmethod
     def from_json(cls, json_string: str) -> 'Workflow':
         """
@@ -244,8 +251,13 @@ class Workflow:
         from .consistency import Consistency
         template_model = self._create_model_instance()
         criteria_matrices = {nid: m for nid, m in expert_matrices.items() if not template_model._find_node(nid).is_leaf}
-        self.consistency_report = Consistency.check_group_consistency(template_model, criteria_matrices, **self.recipe)
+        defuzz_method_for_consistency = self.recipe.get('consistency_method', 'centroid')
 
+        self.consistency_report = Consistency.check_group_consistency(
+            model=template_model,
+            expert_matrices=criteria_matrices,
+            consistency_method=defuzz_method_for_consistency
+        )
         leaf_nodes = self._create_model_instance().root.get_all_leaf_nodes()
         leaf_ids = [node.id for node in leaf_nodes]
         final_weights_dict = dict(zip(leaf_ids, final_group_weights_vector))
@@ -424,13 +436,17 @@ class Workflow:
 
         print("\n--- Scoring alternatives based on performance data ---")
 
-        if performance_scores is None:
-            raise ValueError("The 'scoring' workflow requires the 'performance_scores' argument to be provided to the .score() method.")
-
-        for alt_name, scores in performance_scores.items():
-            alt_obj = self.model.get_alternative(alt_name)
-            for leaf_id, score_val in scores.items():
-                alt_obj.set_performance_score(leaf_id, score_val)
+        if performance_scores is not None:
+            print("  - Loading performance scores from provided dictionary...")
+            for alt_name, scores in performance_scores.items():
+                try:
+                    alt_obj = self.model.get_alternative(alt_name)
+                    for leaf_id, score_val in scores.items():
+                        alt_obj.set_performance_score(leaf_id, score_val)
+                except ValueError:
+                    print(f"Warning: Alternative '{alt_name}' from performance_scores not found in model. Skipping.")
+        else:
+            print("  - Using pre-loaded performance scores from Alternative objects.")
 
         self.model.score_alternatives_by_performance()
         self.rankings = self.model.get_rankings()
