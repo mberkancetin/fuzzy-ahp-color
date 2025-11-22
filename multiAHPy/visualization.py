@@ -159,7 +159,6 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None, cons
             border: 1px solid #e0e0e0; border-radius: 8px; padding: 1.5em;
             margin: 20px 0; background-color: #f7f9fc;
 
-            /* --- FIX IS HERE --- */
             /* This makes the stage container size itself to its content */
             display: inline-block;
             min-width: 100%; /* Ensures it's at least as wide as the page */

@@ -6,6 +6,7 @@ from .model import Hierarchy, Node, Alternative
 from .types import Crisp, TFN, TrFN, GFN, IFN, IT2TrFN
 from .suggester import suggester
 from .pipeline import Workflow
+from .sanitization import DataSanitizer
 
 from .weight_derivation import register_weight_method
 from .aggregation import register_aggregation_method

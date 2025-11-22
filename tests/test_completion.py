@@ -209,11 +209,14 @@ def test_coincidence_of_methods_for_n4(csato_2024_fig1_matrix):
 
     # Complete with both methods
     completed_eigen = complete_matrix(ipcm, method="eigenvalue_optimization")
-    completed_llsm = complete_matrix(ipcm, method="llsm") # <-- Use the new method
+    completed_eigen_type_agnostic = complete_matrix(ipcm, method="eigenvalue_optimization_type_agnostic")
+    completed_llsm = complete_matrix(ipcm, method="llsm")
+    completed_llsm_type_agnostic = complete_matrix(ipcm, method="llsm_type_agnostic") # <-- Use the new method
 
     # The theorem states these completions should be identical for n=4.
     # We can use a very small tolerance here.
-    assert np.allclose(completed_eigen, completed_llsm, atol=1e-6)
+    assert np.allclose(completed_eigen, completed_llsm_type_agnostic, atol=1e-6)
+    assert np.allclose(completed_eigen_type_agnostic, completed_llsm, atol=1e-6)
 
 
 # --- NEW TEST specific to LLSM ---
@@ -243,6 +246,23 @@ def test_llsm_handles_disconnected_graph(disconnected_ipcm):
 
     with pytest.raises(ValueError, match="iPCM graph may be disconnected"):
         complete_matrix(disconnected_ipcm, method="llsm")
+
+
+def test_llsm_handles_disconnected_graph(disconnected_ipcm):
+    """
+    Tests that the LLSM method fails gracefully if the matrix is disconnected.
+    The pseudoinverse may not raise an error, but the resulting weights
+    would be arbitrary. A proper implementation should check connectivity.
+    Let's first test if it raises an error, if not, we should add a check.
+
+    Update: The pseudoinverse will often "work" but give a poor solution.
+    A graph connectivity check is better. Let's add it.
+    """
+    # Let's add a graph check to our LLSM function for robustness.
+    # (We will modify the main function after writing this test).
+
+    with pytest.raises(ValueError, match="LLSM completion failed: iPCM graph is disconnected."):
+        complete_matrix(disconnected_ipcm, method="llsm_type_agnostic")
 
 
 def test_create_completed_crisp_matrix(incomplete_crisp_matrix):

@@ -126,7 +126,7 @@ class MethodSuggester:
 
         # --- Suggest Defuzzification Method ---
         if recipe['number_type'] == IFN:
-            recipe['consistency_method'] = 'score'
+            recipe['consistency_method'] = 'normalized_score'
         else:
             recipe['consistency_method'] = 'centroid'
 

@@ -91,7 +91,7 @@ class FuzzyScale:
         elif type_name == 'GFN':
             params = (value, value * (fuzziness / 10.0))
         elif type_name == 'IFN':
-            scale = "nyugen"
+            scale = "nguyen_9_level"
             params = configure_parameters.FUZZY_IFN_SCALES[scale][value]
         elif type_name == 'IT2TrFN':
             l, m, u = configure_parameters.FUZZY_TFN_SCALES[scale][abs(crisp_value)]
@@ -320,3 +320,54 @@ def create_completed_matrix(
     # --- Step 3: Fill the lower triangle with reciprocals ---
     # This ensures the final matrix is perfectly reciprocal in the fuzzy sense.
     return complete_matrix_from_upper_triangle(final_fuzzy_matrix)
+
+def rebuild_consistent_matrix(inconsistent_matrix: np.ndarray) -> np.ndarray:
+    """
+    Creates a new, perfectly consistent matrix from an inconsistent one.
+
+    This is achieved by:
+    1. Calculating the priority vector (weights) from the inconsistent matrix
+       using the robust geometric mean method.
+    2. Building a new matrix where each element a_ij is the ratio w_i / w_j.
+
+    The resulting matrix is perfectly consistent (its Saaty's CR will be 0.0).
+    This is a core technique for consistency optimization.
+
+    Args:
+        inconsistent_matrix: A complete, square NumPy array of numerical judgments.
+
+    Returns:
+        A new, perfectly consistent NumPy array of the same size.
+    """
+    n = inconsistent_matrix.shape[0]
+
+    try:
+        matrix = inconsistent_matrix.astype(float)
+    except (ValueError, TypeError):
+        raise TypeError("Input matrix for rebuild_consistent_matrix must be numerical or convertible to float.")
+
+    sanitized_matrix = np.maximum(matrix, 1e-9)
+
+    try:
+        log_matrix = np.log(sanitized_matrix)
+        weights = np.exp(np.mean(log_matrix, axis=1))
+
+        weight_sum = np.sum(weights)
+        if weight_sum < 1e-9:
+            return np.ones((n, n), dtype=float)
+
+        weights /= weight_sum
+
+    except Exception as e:
+        print(f"Warning: Could not calculate geometric mean weights during rebuild. Defaulting to equal weights. Error: {e}")
+        weights = np.full(n, 1.0 / n)
+
+    consistent_matrix = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        for j in range(n):
+            if weights[j] > 1e-9:
+                consistent_matrix[i, j] = weights[i] / weights[j]
+            else:
+                consistent_matrix[i, j] = 1.0
+
+    return consistent_matrix

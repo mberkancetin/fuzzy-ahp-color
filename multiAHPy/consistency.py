@@ -53,6 +53,29 @@ def register_consistency_method(
     return decorator
 
 
+class Registry(dict):
+    """
+    A custom dictionary that validates insertions to ensure only
+    callable objects (functions, methods) are registered.
+    """
+    def __setitem__(self, key: str, value: Callable):
+        if not callable(value):
+            # This is our guard rail. It will crash the program with a clear message.
+            raise TypeError(
+                f"Attempted to register a non-callable object of type '{type(value).__name__}' "
+                f"for the key '{key}'. Only functions or methods can be registered."
+            )
+        super().__setitem__(key, value)
+
+    def register(self, name: str) -> Callable:
+        """Decorator factory for registering a function."""
+        def decorator(func: Callable) -> Callable:
+            self[name] = func
+            return func
+        return decorator
+
+CONSISTENCY_METHODS = Registry()
+
 class Consistency:
     """
     A class with static methods to calculate, check, and analyze the
@@ -92,12 +115,12 @@ class Consistency:
 
         return configure_parameters.SAATY_RI_VALUES.get(n, configure_parameters.SAATY_RI_VALUES['default'])
 
-    @register_consistency_method("saaty_cr", has_threshold=True, threshold_func=_get_saaty_cr_threshold)
+    @CONSISTENCY_METHODS.register("saaty_cr")
     def calculate_saaty_cr(
         matrix: np.ndarray,
         consistency_method: str = 'centroid',
         epsilon: float | None = None,
-        num_missing_pairs: int = 0) -> float:
+        num_missing_pairs: int = 0, **kwargs) -> float:
         """
         Calculates Saaty's traditional Consistency Ratio (CR) by first
         defuzzifying the fuzzy matrix. This is a practical approximation
@@ -166,8 +189,8 @@ class Consistency:
 
         return ci / ri
 
-    @register_consistency_method("gci", has_threshold=True, threshold_func=_get_gci_threshold)
-    def calculate_gci(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
+    @CONSISTENCY_METHODS.register("gci")
+    def calculate_gci(matrix: np.ndarray, consistency_method: str = 'centroid', **kwargs) -> float:
         """
         Calculates the Geometric Consistency Index (GCI) for the matrix.
         A lower GCI value indicates better consistency.
@@ -206,8 +229,8 @@ class Consistency:
         gci = (2 / ((n - 1) * (n - 2))) * sum_of_squared_errors
         return gci
 
-    @register_consistency_method("mikhailov_lambda")
-    def calculate_mikhailov_lambda(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
+    @CONSISTENCY_METHODS.register("mikhailov_lambda")
+    def calculate_mikhailov_lambda(matrix: np.ndarray, consistency_method: str = 'centroid', **kwargs) -> float:
         """
         Calculates the consistency index (lambda) using Mikhailov's (2004)
         Fuzzy Programming method.
@@ -240,92 +263,72 @@ class Consistency:
     @staticmethod
     def check_model_consistency(
         model: Hierarchy,
-        **kwargs
+        consistency_method: str = 'centroid',
+        saaty_cr_threshold: float | None = None
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Performs a comprehensive consistency check on all matrices in the model.
-
-        This function dynamically runs all registered consistency methods and, for
-        those with thresholds, determines a Pass/Fail status. The overall
-        'is_consistent' flag is True only if all threshold-based checks pass.
-
-        Args:
-            model: The Hierarchy instance to check.
-            **kwargs: Additional arguments to pass down to calculation functions,
-                      e.g., `consistency_method='centroid'` or `saaty_cr_threshold=0.2`.
-
-        Returns:
-            A dictionary where keys are node IDs and values are a detailed
-            dictionary of all calculated consistency metrics.
+        Performs a comprehensive consistency check on all matrices in the model by
+        running all registered consistency calculation methods.
         """
-        results_aggregator = {}
+        final_cr_threshold = saaty_cr_threshold if saaty_cr_threshold is not None else configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
+
+        results = {}
 
         def _recursive_check(node: Node):
+            for child in node.children:
+                _recursive_check(child)
+
             if node.comparison_matrix is None:
                 return
 
             matrix = node.comparison_matrix
             n = matrix.shape[0]
+            number_type = type(matrix[0, 0])
 
-            node_results = {"matrix_size": n}
+            num_missing_pairs = np.count_nonzero(matrix == None) // 2
 
-            consistency_check_outcomes = []
+            node_results = {
+                "matrix_size": n,
+                "num_missing_pairs": num_missing_pairs
+            }
 
-            for name, meta in CONSISTENCY_METHODS.items():
-                calc_func = meta["function"]
+            context_args = {
+                "matrix": matrix,
+                "number_type": number_type,
+                "consistency_method": consistency_method,
+                "num_missing_pairs": num_missing_pairs,
+                "model": model
+            }
+
+            for name, func in CONSISTENCY_METHODS.items():
                 try:
-                    func_params = inspect.signature(calc_func).parameters
-
-                    available_args = {
-                        "matrix": matrix,
-                        "number_type": type(matrix[0, 0]),
-                    }
-                    available_args.update(kwargs)
-
-                    args_for_this_call = {
-                        p_name: available_args[p_name]
-                        for p_name in func_params
-                        if p_name in available_args
-                    }
-
-                    value = calc_func(**args_for_this_call)
-                    node_results[name] = value
-
-                    if meta.get("has_threshold"):
-                        threshold_func = meta["threshold_func"]
-
-                        threshold_value = threshold_func(n, **kwargs)
-                        node_results[f"{name}_threshold"] = threshold_value
-                        final_tolerance = meta["tolerance"]
-
-                        is_ok = False
-                        status = "Not Calculated"
-                        if isinstance(value, (int, float)):
-                            is_ok = value <= (threshold_value + final_tolerance)
-                            status = "Pass" if is_ok else "Fail"
-
-                        node_results[f"{name}_status"] = status
-                        consistency_check_outcomes.append(is_ok)
-
+                    node_results[name] = func(**context_args)
                 except Exception as e:
-                    node_results[name] = f"Error: {type(e).__name__} - {e}"
-                    if meta.get("has_threshold"):
-                        node_results[f"{name}_status"] = "Error"
-                        consistency_check_outcomes.append(False)
+                    node_results[name] = f"Error: {e}"
 
-            node_results["is_consistent"] = all(consistency_check_outcomes)
-            results_aggregator[node.id] = node_results
+            gci_threshold = Consistency._get_gci_threshold(n)
 
-        def traverse(node: Node):
-            _recursive_check(node)
-            for child in node.children:
-                traverse(child)
+            saaty_cr_val = node_results.get("saaty_cr")
+            gci_val = node_results.get("gci")
 
-        traverse(model.root)
+            is_cr_ok = isinstance(saaty_cr_val, (float, np.floating)) and saaty_cr_val <= final_cr_threshold
+            is_gci_ok = isinstance(gci_val, (float, np.floating)) and gci_val <= gci_threshold
 
-        return results_aggregator
+            all_checks_passed = is_cr_ok and is_gci_ok
 
+            for key, value in node_results.items():
+                if isinstance(value, str) and value.lower().startswith(('error', 'failed')):
+                    all_checks_passed = False
+                    break
 
+            node_results["is_consistent"] = all_checks_passed
+            node_results["saaty_cr_threshold"] = final_cr_threshold
+            node_results["gci_threshold"] = gci_threshold
+
+            results[node.id] = node_results
+
+        _recursive_check(model.root)
+        return results
 
 
     @staticmethod
@@ -394,57 +397,63 @@ class Consistency:
         return all_results
 
     @staticmethod
-    def get_consistency_recommendations(model: Hierarchy, inconsistent_node_id: str, consistency_method: str = 'centroid') -> List[str]:
+    def get_consistency_recommendations(
+        model: Hierarchy,
+        inconsistent_node_id: str,
+        consistency_method: str = 'centroid'
+    ) -> Dict[str, Any]:
         """
-        Provides specific recommendations for improving the consistency of a given matrix.
+        Provides a ranked list of judgments to change to improve consistency.
         """
         node = model._find_node(inconsistent_node_id)
         if node is None or node.comparison_matrix is None:
-            return [f"Error: Node '{inconsistent_node_id}' not found or has no matrix."]
+            return {'error': f"Node '{inconsistent_node_id}' not found or has no matrix."}
 
         matrix = node.comparison_matrix
-        crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
-        n = matrix.shape[0]
+        crisp_matrix = np.array([[c.defuzzify(method=consistency_method) for c in row] for row in matrix], dtype=float)
+        n = crisp_matrix.shape[0]
 
-        # Calculate weights from the crisp matrix using a robust method (geometric mean)
-        # Add epsilon to avoid log(0)
-        log_matrix = np.log(crisp_matrix + configure_parameters.LOG_EPSILON)
-        weights = np.exp(np.mean(log_matrix, axis=1))
-        weights /= np.sum(weights)
+        sanitized_matrix = np.maximum(crisp_matrix, 1e-9)
 
-        # Find the judgment with the largest inconsistency
-        max_error = -1
-        inconsistent_pair = (None, None)
+        try:
+            log_matrix = np.log(sanitized_matrix)
+            weights = np.exp(np.mean(log_matrix, axis=1))
+
+            weight_sum = np.sum(weights)
+            if weight_sum < 1e-9:
+                raise ValueError("Sum of weights is near zero.")
+
+            weights /= weight_sum
+        except Exception as e:
+            return {'error': f"Failed to calculate weights for recommendation. Error: {e}"}
+
+        all_errors = []
         for i in range(n):
             for j in range(i + 1, n):
-                if weights[j] == 0: continue
+                if weights[j] < 1e-9:
+                    continue
+
                 expected_val = weights[i] / weights[j]
-                actual_val = crisp_matrix[i, j]
-                # Logarithmic difference is better for ratio scales
-                error = abs(np.log(actual_val) - np.log(expected_val))
-                if error > max_error:
-                    max_error = error
-                    inconsistent_pair = (i, j)
+                actual_val = crisp_matrix[i, j] 
 
-        recommendations = []
-        cr = Consistency.calculate_saaty_cr(matrix)
-        recommendations.append(f"Matrix for node '{node.id}' is inconsistent (CR = {cr:.4f}).")
+                if abs(expected_val) > 1e-9:
+                    error = abs(actual_val - expected_val) / expected_val
+                else:
+                    error = abs(actual_val - expected_val)
 
-        if inconsistent_pair[0] is None:
-            recommendations.append("Could not identify a primary inconsistent judgment.")
-            return recommendations
+                all_errors.append({
+                    "pair": (i, j),
+                    "error": error,
+                    "current_value": actual_val,
+                    "suggested_value": expected_val,
+                })
 
-        i, j = inconsistent_pair
-        children_names = [child.id for child in node.children]
+        if not all_errors:
+            return {'error': "Could not calculate inconsistency errors for any pair."}
 
-        recommendations.append(
-            f"The most inconsistent judgment appears to be between '{children_names[i]}' and '{children_names[j]}'."
-        )
+        all_errors.sort(key=lambda x: x['error'], reverse=True)
 
-        current_judgment = crisp_matrix[i, j]
-        suggested_judgment = weights[i] / weights[j]
-        recommendations.append(
-            f"Your judgment was approximately {current_judgment:.2f}, but based on your other answers, it should be closer to {suggested_judgment:.2f}."
-        )
-
-        return recommendations
+        return {
+            "revisions": all_errors,
+            "children_names": [child.id for child in node.children]
+        }

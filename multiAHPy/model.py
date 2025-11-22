@@ -531,14 +531,14 @@ class Hierarchy(Generic[Number]):
             return
 
         leaf_nodes = self.root.get_all_leaf_nodes()
-        leaf_node_ids = {leaf.id for leaf in leaf_nodes}
+        leaf_node_ids = sorted([leaf.id for leaf in leaf_nodes])
 
+        # The rest of the function remains the same
         for alt in self.alternatives:
             for leaf_id in leaf_node_ids:
                 if leaf_id not in alt.performance_scores:
                     raise ValueError(f"Missing performance score for leaf node '{leaf_id}' in alternative '{alt.name}'. Use `alt.set_performance_score()`.")
-
-            alt.overall_score = self._calculate_performance_score_recursive(self.root, alt)
+                alt.overall_score = self._calculate_performance_score_recursive(self.root, alt)
 
         print("Alternative performance scoring complete.")
 
@@ -592,75 +592,20 @@ class Hierarchy(Generic[Number]):
 
         return crisp_rankings
 
-    def check_consistency(
-        self,
-        consistency_method: str = 'centroid',
-        saaty_cr_threshold: float | None = None,
-        num_missing_map: Dict[str, int] | None = None
-    ) -> Dict[str, Dict[str, Any]]:
+    def check_consistency(self, **kwargs) -> Dict[str, Dict[str, Any]]:
         """
-        Performs a comprehensive consistency check on all matrices in the model,
-        calculating all registered consistency metrics.
+        Performs a comprehensive consistency check on all matrices in the model.
+
+        This is a convenience method that delegates the calculation to the
+        `Consistency.check_model_consistency` static method.
 
         Args:
-            consistency_method: The defuzzification method used for CR and GCI.
-            saaty_cr_threshold: The acceptable threshold for Saaty's CR. If None,
-                                uses the value from ahp_config.
-            num_missing_map: A dict mapping node IDs to the number of missing
-                             pairs in their matrix. Used to select the correct
-                             generalized Random Index.
+            **kwargs: Can include 'consistency_method' and 'saaty_cr_threshold'.
+
         Returns:
-            A dictionary where keys are node IDs and values are a detailed
-            dictionary of all calculated consistency metrics.
+            A dictionary with detailed consistency results for each matrix in the model.
         """
-        from .consistency import Consistency, CONSISTENCY_METHODS
-        from .config import configure_parameters
-
-        if num_missing_map is None:
-            num_missing_map = {}
-
-        final_cr_threshold = saaty_cr_threshold if saaty_cr_threshold is not None else configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
-
-        full_report = {}
-
-        def _traverse_and_check(node: Node):
-            if node.comparison_matrix is not None:
-                matrix = node.comparison_matrix
-                n = matrix.shape[0]
-                number_type = type(matrix[0, 0])
-                num_missing = num_missing_map.get(node.id, 0)
-                node_results = {"matrix_size": n, "num_missing_pairs": num_missing}
-
-                for name, func in CONSISTENCY_METHODS.items():
-                    try:
-                        node_results[name] = func(
-                            matrix=matrix,
-                            number_type=number_type,
-                            consistency_method=consistency_method,
-                            num_missing_pairs=num_missing
-                        )
-                    except Exception as e:
-                        node_results[name] = f"Error: {e}"
-
-                gci_threshold = Consistency._get_gci_threshold(n)
-                cr_val = node_results.get("saaty_cr", float('inf'))
-                gci_val = node_results.get("gci", float('inf'))
-
-                is_cr_ok = isinstance(cr_val, (int, float)) and cr_val <= final_cr_threshold
-                is_gci_ok = isinstance(gci_val, (int, float)) and gci_val <= gci_threshold
-
-                node_results["is_consistent"] = is_cr_ok and is_gci_ok
-                node_results["saaty_cr_threshold"] = final_cr_threshold
-                node_results["gci_threshold"] = gci_threshold
-
-                full_report[node.id] = node_results
-
-            for child in node.children:
-                _traverse_and_check(child)
-
-        _traverse_and_check(self.root)
-
-        return full_report
+        return Consistency.check_model_consistency(self, **kwargs)
 
     def display(self):
         """

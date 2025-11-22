@@ -256,7 +256,7 @@ def test_ifn_comparison(ifn1, ifn2):
 
     # Verify scores are equal and accuracies are different
     assert ifn_low_accuracy.defuzzify(method="score") == pytest.approx(ifn_high_accuracy.defuzzify(method="score"))
-    assert ifn_high_accuracy.defuzzify(method="accuracy") > ifn_low_accuracy.defuzzify(method="accuracy") 
+    assert ifn_high_accuracy.defuzzify(method="accuracy") > ifn_low_accuracy.defuzzify(method="accuracy")
 
     # The one with higher accuracy should be considered "greater" in a tie
     assert ifn_high_accuracy > ifn_low_accuracy
@@ -284,8 +284,9 @@ def test_ifn_defuzzification(ifn1):
 
     # Score method: 0.6 - 0.3 = 0.3
     assert ifn1.defuzzify(method='score') == pytest.approx(0.3)
-    # Centroid method should be an alias for score
-    assert ifn1.defuzzify(method='centroid') == pytest.approx(0.3)
+    # Centroid method should be an alias for normalized_score
+    # (0.6 + 1 - 0.3) / 2 = 0.65
+    assert ifn1.defuzzify(method='normalized_score') == pytest.approx(0.65)
 
     # Value method: mu + pi*mu = 0.6 + (0.1 * 0.6) = 0.6 + 0.06 = 0.66
     assert ifn1.defuzzify(method='value') == pytest.approx(0.66)

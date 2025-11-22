@@ -179,6 +179,15 @@ def score_method_ifn(ifn: IFN) -> float:
     """
     return ifn.mu - ifn.nu
 
+def chen_tan_scoring_ifn(ifn: IFN) -> float:
+    """
+    Calculates a normalized score for an IFN on a [0, 1] scale.
+    Based on Chen & Tan (1994), this is suitable for using IFNs as
+    weights or performance values in aggregation, as it's always positive.
+    Formula: S = (μ + 1 - ν) / 2
+    """
+    return (ifn.mu + 1.0 - ifn.nu) / 2.0
+
 def accuracy_method_ifn(ifn: IFN) -> float:
     """
     Calculates the Accuracy Function (H = μ + ν). This value represents the
@@ -257,7 +266,8 @@ GFN.register_defuzzify_method('pessimistic_99_percent', pessimistic_method_gfn)
 # crisp value for ranking. Different methods exist based on how the
 # hesitation degree (π = 1 - μ - ν) is handled.
 IFN.register_defuzzify_method('score', score_method_ifn)
-IFN.register_defuzzify_method('centroid', score_method_ifn) # 'centroid' is an alias for 'score'
+IFN.register_defuzzify_method('normalized_score', chen_tan_scoring_ifn) 
+IFN.register_defuzzify_method('centroid', chen_tan_scoring_ifn) # 'centroid' is an alias for 'normalized_score'
 IFN.register_defuzzify_method('accuracy', accuracy_method_ifn)
 IFN.register_defuzzify_method('value', value_method_ifn)
 IFN.register_defuzzify_method('entropy', entropy_method_ifn)

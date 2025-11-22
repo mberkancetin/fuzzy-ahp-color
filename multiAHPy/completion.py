@@ -156,7 +156,7 @@ def complete_by_dematel(incomplete_matrix: np.ndarray, **kwargs) -> np.ndarray:
                 ratio = trm[i, j] / trm[j, i]
                 completed_matrix[i, j] = np.sqrt(ratio) if ratio > 0 else 1.0
                 completed_matrix[j, i] = 1.0 / completed_matrix[i, j]
-            else: 
+            else:
                 completed_matrix[i, j] = 1.0
 
     return completed_matrix.astype(float)
@@ -242,3 +242,281 @@ def complete_by_llsm(incomplete_matrix: np.ndarray, **kwargs) -> np.ndarray:
                 completed_matrix[i, j] = weights[i] / weights[j]
 
     return completed_matrix.astype(float)
+
+
+# ==============================================================================
+# IMPLEMENTATION OF TYPE-AGNOSTIC COMPLETION METHODS
+# ==============================================================================
+
+
+@register_completion_method("llsm_type_agnostic")
+def complete_by_type_agnostic_llsm(incomplete_matrix: np.ndarray, **kwargs) -> np.ndarray:
+    """
+    Completes an iPCM of any number type using the Logarithmic Least Squares Method.
+    This method is type-agnostic and handles both fuzzy and crisp numerical inputs.
+    """
+    from scipy.linalg import pinv
+
+    n = incomplete_matrix.shape[0]
+
+    number_type = None
+    is_input_fuzzy = False
+
+    for i in range(n):
+        for j in range(n):
+            cell = incomplete_matrix[i, j]
+            if cell is not None and not (isinstance(cell, float) and np.isnan(cell)):
+                if hasattr(cell, 'defuzzify'):
+                    number_type = type(cell)
+                    is_input_fuzzy = True
+                else:
+                    number_type = float
+                break
+        if number_type:
+            break
+
+    if number_type is None:
+        raise ValueError("Cannot perform LLSM on a completely empty matrix.")
+
+    crisp_ipcm = np.full((n, n), np.nan, dtype=float)
+    for i in range(n):
+        for j in range(n):
+            cell = incomplete_matrix[i, j]
+            if cell is not None:
+                if hasattr(cell, 'defuzzify'):
+                    crisp_ipcm[i, j] = cell.defuzzify()
+                elif isinstance(cell, (int, float, np.number)):
+                    crisp_ipcm[i, j] = float(cell)
+                elif isinstance(cell, float) and np.isnan(cell):
+                    pass
+                else:
+                    raise TypeError(f"Unsupported cell type in matrix: {type(cell)}")
+
+    adj = {i: [] for i in range(n)}
+    for i in range(n):
+        for j in range(i + 1, n):
+            if not np.isnan(crisp_ipcm[i, j]):
+                adj[i].append(j)
+                adj[j].append(i)
+
+    q, visited, head = [0], {0}, 0
+    while head < len(q):
+        u = q[head]; head += 1
+        for v in adj[u]:
+            if v not in visited:
+                visited.add(v); q.append(v)
+    if len(visited) != n:
+        raise ValueError("LLSM completion failed: iPCM graph is disconnected.")
+
+    laplacian = np.zeros((n, n))
+    b = np.zeros(n)
+
+    # Sanitize for log operation
+    sanitized_crisp_ipcm = np.nan_to_num(crisp_ipcm, nan=0.0, posinf=1e9, neginf=-1e9)
+    sanitized_crisp_ipcm = np.maximum(sanitized_crisp_ipcm, 1e-9)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if not np.isnan(crisp_ipcm[i, j]):
+                log_aij = np.log(sanitized_crisp_ipcm[i, j])
+
+                laplacian[i, j] = -1
+                laplacian[j, i] = -1
+                laplacian[i, i] += 1
+                laplacian[j, j] += 1
+
+                b[i] += log_aij
+                b[j] -= log_aij
+
+    try:
+        log_weights = pinv(laplacian) @ b
+    except np.linalg.LinAlgError:
+        raise ValueError("Could not solve LLSM system. Matrix may be numerically unstable.")
+
+    weights = np.exp(log_weights)
+
+    if is_input_fuzzy:
+        completed_matrix = incomplete_matrix.copy()
+        for i in range(n):
+            for j in range(n):
+                if completed_matrix[i, j] is None or (isinstance(completed_matrix[i, j], float) and np.isnan(completed_matrix[i, j])):
+                    crisp_value = weights[i] / weights[j]
+                    completed_matrix[i, j] = number_type.from_crisp(crisp_value)
+        return completed_matrix
+
+    else:
+        completed_matrix = np.zeros((n, n), dtype=float)
+        for i in range(n):
+            for j in range(n):
+                if not np.isnan(crisp_ipcm[i, j]):
+                    completed_matrix[i, j] = crisp_ipcm[i, j]
+                else:
+                    completed_matrix[i, j] = weights[i] / weights[j]
+        return completed_matrix
+
+@register_completion_method("eigenvalue_optimization_type_agnostic")
+def complete_by_type_agnostic_eigenvalue_optimization(
+    incomplete_matrix: np.ndarray,
+    max_iter: int = 100,
+    tolerance: float = 1e-6,
+    **kwargs
+) -> np.ndarray:
+    """
+    Completes an iPCM of any number type by minimizing the principal eigenvalue.
+    Based on the cyclic coordinates method (Bozóki et al., 2010).
+
+    This method is type-agnostic. It internally defuzzifies the matrix to perform
+    numerical optimization and then returns a matrix of the original type.
+    """
+    try:
+        from scipy.optimize import minimize_scalar
+    except ImportError:
+        raise ImportError("The 'eigenvalue_optimization' method requires SciPy. Install it with: pip install scipy")
+
+    n = incomplete_matrix.shape[0]
+
+    number_type = None
+    is_input_fuzzy = False
+
+    crisp_matrix = np.full((n, n), np.nan, dtype=float)
+    missing_indices = []
+
+    for i in range(n):
+        for j in range(n):
+            cell = incomplete_matrix[i, j]
+            if cell is None or (isinstance(cell, float) and np.isnan(cell)):
+                if i < j:
+                    missing_indices.append((i, j))
+            else:
+                if not number_type and hasattr(cell, 'defuzzify'):
+                    number_type = type(cell)
+                    is_input_fuzzy = True
+
+                crisp_matrix[i, j] = cell.defuzzify() if hasattr(cell, 'defuzzify') else float(cell)
+
+    if number_type is None and is_input_fuzzy is False:
+        number_type = float
+
+    for i, j in missing_indices:
+        crisp_matrix[i, j] = 1.0
+        crisp_matrix[j, i] = 1.0
+
+    def get_lambda_max(x_val, i, j, current_matrix):
+        temp_matrix = current_matrix.copy()
+        temp_matrix[i, j] = x_val
+        temp_matrix[j, i] = 1.0 / x_val
+        return np.max(np.real(np.linalg.eigvals(temp_matrix)))
+
+    for iteration in range(max_iter):
+        previous_matrix = crisp_matrix.copy()
+
+        for i, j in missing_indices:
+            res = minimize_scalar(
+                get_lambda_max,
+                args=(i, j, crisp_matrix),
+                bounds=(1e-5, 1e5),
+                method='bounded'
+            )
+            crisp_matrix[i, j] = res.x
+            crisp_matrix[j, i] = 1.0 / res.x
+
+        if np.allclose(previous_matrix, crisp_matrix, atol=tolerance):
+            print(f"Eigenvalue optimization converged in {iteration + 1} iterations.")
+            break
+    else:
+        print("Warning: Eigenvalue optimization did not converge within max_iter.")
+
+    if is_input_fuzzy:
+        completed_fuzzy_matrix = np.empty((n, n), dtype=object)
+        for i in range(n):
+            for j in range(n):
+                completed_fuzzy_matrix[i, j] = number_type.from_crisp(crisp_matrix[i, j])
+        return completed_fuzzy_matrix
+    else:
+        return crisp_matrix
+
+# In multiAHPy/completion.py
+
+@register_completion_method("dematel_type_agnostic")
+def complete_by_type_agnostic_dematel(incomplete_matrix: np.ndarray, **kwargs) -> np.ndarray:
+    """
+    Completes an iPCM of any number type using the DEMATEL-based method.
+    This method is type-agnostic and handles both fuzzy and crisp numerical inputs.
+    """
+    n = incomplete_matrix.shape[0]
+
+    number_type = None
+    is_input_fuzzy = False
+
+    crisp_ipcm = np.full((n, n), np.nan, dtype=float)
+
+    for i in range(n):
+        for j in range(n):
+            cell = incomplete_matrix[i, j]
+            if cell is not None and not (isinstance(cell, float) and np.isnan(cell)):
+                if not number_type and hasattr(cell, 'defuzzify'):
+                    number_type = type(cell)
+                    is_input_fuzzy = True
+
+                crisp_ipcm[i, j] = cell.defuzzify() if hasattr(cell, 'defuzzify') else float(cell)
+
+    if number_type is None and not is_input_fuzzy:
+        number_type = float
+
+    adj = {i: [] for i in range(n)}
+    for i in range(n):
+        for j in range(i + 1, n):
+            if not np.isnan(crisp_ipcm[i, j]):
+                adj[i].append(j)
+                adj[j].append(i)
+
+    q, visited, head = [0], {0}, 0
+    while head < len(q):
+        u = q[head]; head += 1
+        for v in adj[u]:
+            if v not in visited:
+                visited.add(v); q.append(v)
+    if len(visited) != n:
+        raise ValueError("Matrix is disconnected. DEMATEL completion requires a connected graph of judgments.")
+
+    drm = np.nan_to_num(crisp_ipcm, nan=0.0)
+
+    np.fill_diagonal(drm, 0)
+
+    row_sums = np.sum(drm, axis=1)
+    max_sum = np.max(row_sums)
+    if max_sum < 1e-9:
+        return np.ones((n, n)) if not is_input_fuzzy else np.array([[number_type.from_crisp(1.0)]*n]*n, dtype=object)
+
+    normalized_drm = drm / max_sum
+    identity = np.identity(n)
+    try:
+        trm = normalized_drm @ np.linalg.inv(identity - normalized_drm)
+    except np.linalg.LinAlgError:
+        raise ValueError("Matrix is singular, cannot compute TRM. This can happen in disconnected graphs.")
+
+    if is_input_fuzzy:
+        completed_fuzzy_matrix = np.empty((n, n), dtype=object)
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    completed_fuzzy_matrix[i, j] = number_type.multiplicative_identity()
+                    continue
+
+                if trm[j, i] > 1e-9:
+                    ratio = trm[i, j] / trm[j, i]
+                    crisp_value = np.sqrt(ratio) if ratio > 0 else 1.0
+                    completed_fuzzy_matrix[i, j] = number_type.from_crisp(crisp_value)
+                else:
+                    completed_fuzzy_matrix[i, j] = number_type.from_crisp(1.0)
+        return completed_fuzzy_matrix
+
+    else:
+        completed_matrix = np.ones((n, n), dtype=float)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if trm[j, i] > 1e-9:
+                    ratio = trm[i, j] / trm[j, i]
+                    completed_matrix[i, j] = np.sqrt(ratio) if ratio > 0 else 1.0
+                    completed_matrix[j, i] = 1.0 / completed_matrix[i, j]
+        return completed_matrix

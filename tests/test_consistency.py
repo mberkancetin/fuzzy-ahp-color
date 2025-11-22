@@ -105,14 +105,12 @@ def test_get_consistency_recommendations(inconsistent_model: Hierarchy):
     """Tests the recommendation generation for an inconsistent matrix."""
     recommendations = Consistency.get_consistency_recommendations(inconsistent_model, "Goal")
 
-    assert isinstance(recommendations, list)
-    # Expect 3 lines: header, which pair is inconsistent, and suggested value.
-    assert len(recommendations) >= 3
+    assert isinstance(recommendations, dict)
+    assert len(recommendations['children_names']) >= 3
+    print(recommendations)
 
-    # Check that the recommendation strings contain the expected content.
-    assert "inconsistent (CR =" in recommendations[0]
-    assert "judgment appears to be between" in recommendations[1]
-    assert "should be closer to" in recommendations[2]
+    assert np.float64(5.0) == recommendations['revisions'][0]['current_value']
+    assert (0, 1) == recommendations['revisions'][0]['pair']
 
 def test_check_model_consistency(inconsistent_model: Hierarchy):
     """

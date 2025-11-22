@@ -6,7 +6,10 @@ import numpy as np
 from .model import Hierarchy, Node
 from .types import NumericType, TFN, Crisp, IFN, TrFN, GFN, IT2TrFN
 from .aggregation import aggregate_matrices, aggregate_priorities
-from .matrix_builder import create_matrix_from_list
+from .matrix_builder import create_matrix_from_list, create_comparison_matrix, FuzzyScale, complete_matrix_from_upper_triangle
+from .completion import complete_matrix
+from .consistency import Consistency
+from .sanitization import DataSanitizer
 
 
 TYPE_MAP = {
@@ -56,17 +59,20 @@ class Workflow:
         if workflow_type not in ["ranking", "scoring"]:
             raise ValueError("workflow_type must be either 'ranking' or 'scoring'.")
 
+        self.root_node = root_node
         self.workflow_type = workflow_type
-        self.group_strategy = group_strategy
         self.recipe = recipe
-        self._root_node_template = root_node
-        self.alternatives = alternatives
+        self.alternatives_list = alternatives
+        self.group_strategy = group_strategy
+
+        self.model = Hierarchy(root_node, number_type=recipe['number_type'])
+        for alt_name in alternatives:
+            self.model.add_alternative(alt_name)
+
+        self.expert_matrices: Dict[str, List[np.ndarray]] | None = None
+        self.criteria_weights: Dict[str, Any] | None = None
         self.rankings: List[Tuple[str, float]] | None = None
         self.consistency_report: Dict[str, Any] | None = None
-        self.criteria_weights: Dict[str, float] | None = None
-        self.completion_method = completion_method
-        self.num_missing_in_report: Dict[str, int] = {}
-        self.model = self._create_model_instance()
 
     def display(self):
         """
@@ -167,6 +173,7 @@ class Workflow:
 
         This method populates the pipeline with `self.criteria_weights` and `self.consistency_report`.
         """
+        self.expert_matrices = expert_matrices
         print(f"\n--- Fitting Weights (Strategy: {self.group_strategy}) ---")
         self.consistency_report = {}
 
@@ -383,6 +390,12 @@ class Workflow:
         """Helper to manage the complexity of the Aggregate Priorities workflow."""
         final_weights = {}
 
+        derivation_method = self.recipe.get('weight_derivation_method', 'geometric_mean')
+
+        if 'weight_derivation_method' not in self.recipe:
+            print(f"  - Warning: 'weight_derivation_method' not found in recipe. "
+                f"Defaulting to '{derivation_method}'.")
+
         for node_id, matrices in criteria_matrices_per_node.items():
             aggregated_vector = aggregate_priorities(
                 matrices,
@@ -395,34 +408,32 @@ class Workflow:
 
     def _set_final_weights_on_model(self, final_crisp_weights: Dict[str, np.ndarray]):
         """
-        Manually sets the local and global weights on the main model.
-        This is necessary after the AIP workflow.
+        Manually sets the local and global weights on the main model after the AIP workflow.
+        This version correctly handles multi-level hierarchies.
         """
         number_type = self.recipe['number_type']
 
-        def recursive_setter(node: Node, parent_global_weight: NumericType):
-            node.global_weight = parent_global_weight * node.local_weight
-
+        def recursive_setter(node: Node):
             if node.id in final_crisp_weights:
                 child_weights = final_crisp_weights[node.id]
+                if len(child_weights) != len(node.children):
+                    raise ValueError(f"Weight vector for node '{node.id}' has wrong size.")
+
                 for i, child in enumerate(node.children):
                     child.local_weight = number_type.from_crisp(child_weights[i])
 
             for child in node.children:
-                if not child.is_leaf:
-                    recursive_setter(child, node.global_weight)
+                if child.local_weight is None or node.global_weight is None:
+                    continue
+
+                child.global_weight = node.global_weight * child.local_weight
+                recursive_setter(child)
 
         root = self.model.root
         root.local_weight = number_type.multiplicative_identity()
         root.global_weight = number_type.multiplicative_identity()
 
-        if root.id in final_crisp_weights:
-            child_weights = final_crisp_weights[root.id]
-            for i, child in enumerate(root.children):
-                child.local_weight = number_type.from_crisp(child_weights[i])
-
-        for child in root.children:
-            recursive_setter(child, root.global_weight)
+        recursive_setter(root)
 
     def score(self, performance_scores: Dict[str, Dict[str, float]] | None = None) -> 'Workflow':
         """
@@ -518,3 +529,261 @@ class Workflow:
 
         print("--- Ranking complete. ---")
         return self
+
+    def make_consistent(self, **kwargs):
+            """
+            Creates and runs a DataSanitizer to revise the expert matrices.
+            This method is a convenience wrapper around the DataSanitizer class.
+            """
+            if self.expert_matrices is None:
+                raise RuntimeError("Cannot make consistent before data is loaded. Run .fit_weights() first.")
+
+            sanitizer = DataSanitizer(**kwargs)
+
+            sanitized_matrices, change_log = sanitizer.transform(
+                raw_expert_matrices=self.expert_matrices,
+                root_node=self.root_node,
+                target_number_type=self.recipe['number_type']
+            )
+
+            self.expert_matrices = sanitized_matrices
+
+            print("\n--- Re-fitting model with sanitized matrices ---")
+            self.fit_weights(self.expert_matrices)
+
+            return change_log
+
+    def make_consistent2(
+        self,
+        target_cr: float | None = None,
+        max_cycles: int = 50,
+        strategy: Literal["adjust_optimal", "adjust_bounded", "remove_and_complete"] = "adjust_bounded",
+        bound: float = 9.0,
+        completion_method: str = "llsm"
+    ) -> Dict[str, Any]:
+        """
+        Automatically revises inconsistent matrices until they meet an acceptable consistency threshold.
+
+        This method iteratively finds the single most inconsistent matrix in the dataset,
+        applies a revision to its most inconsistent judgment, and repeats the process
+        until all matrices are acceptably consistent or the cycle limit is reached.
+
+        Args:
+            target_cr (float, optional): The target Saaty's Consistency Ratio. If None, uses
+                                         the default from the global configure_parameters. Defaults to None.
+            max_cycles (int, optional): The maximum number of revision cycles to run to prevent
+                                        infinite loops. Defaults to 50.
+            strategy (str, optional): The method for fixing an inconsistent judgment.
+                - 'adjust_optimal': Replaces the value with the pure mathematical ideal,
+                                    issuing a warning if it's outside the Saaty scale.
+                - 'adjust_bounded': (Default) Replaces the value with the ideal, but
+                                    clipped to the [1/bound, bound] scale.
+                - 'remove_and_complete': Treats the judgment as missing and uses a completion
+                                         algorithm to estimate a new value for the whole matrix.
+            bound (float, optional): The upper limit for the Saaty scale (e.g., 9.0), used by
+                                     the 'adjust_optimal' and 'adjust_bounded' strategies.
+            completion_method (str, optional): The completion algorithm to use if
+                                             `strategy` is 'remove_and_complete'.
+
+        Returns:
+            A dictionary logging all the changes that were made.
+        """
+        from .config import configure_parameters
+
+        if self.consistency_report is None:
+            raise RuntimeError("Consistency not checked. Run .fit_weights() before .make_consistent().")
+        if self.expert_matrices is None:
+            raise RuntimeError("Expert matrices not stored. Cannot perform revisions.")
+
+        final_target_cr = target_cr if target_cr is not None else configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
+
+        print(f"\n--- Revising matrices to meet CR <= {final_target_cr} (Strategy: {strategy}) ---")
+
+        change_log = {}
+
+        for revision_cycle in range(max_cycles):
+            matrices_to_fix = []
+            for expert_id, report in self.consistency_report.items():
+                for node_id, metrics in report.items():
+                    cr_val = metrics.get('saaty_cr')
+                    if isinstance(cr_val, (float, np.floating)) and cr_val > final_target_cr:
+                        matrices_to_fix.append({
+                            "expert_id": expert_id,
+                            "node_id": node_id,
+                            "cr": cr_val
+                        })
+
+            if not matrices_to_fix:
+                print(f"\n✅ All matrices meet the consistency target (CR <= {final_target_cr}).")
+                break
+
+            print(f"\nCycle {revision_cycle + 1}/{max_cycles}: Found {len(matrices_to_fix)} inconsistent matrices to revise.")
+
+            change_made_in_cycle = False
+
+            for matrix_info in matrices_to_fix:
+                expert_id = matrix_info['expert_id']
+                node_id = matrix_info['node_id']
+                num_expert = int(expert_id.split('_')[-1]) - 1
+                original_matrix = self.expert_matrices[node_id][num_expert]
+
+                temp_model = Hierarchy(self.model.root, number_type=self.recipe['number_type'])
+                temp_model.set_comparison_matrix(node_id, original_matrix)
+                recommendations = Consistency.get_consistency_recommendations(temp_model, node_id)
+
+                if "error" in recommendations or not recommendations.get("revisions"):
+                    print(f"  - Warning: Could not generate a recommendation for {expert_id}/{node_id}. Skipping this matrix for this cycle.")
+                    continue
+
+                top_rec = recommendations['revisions'][0]
+                i, j = top_rec['pair']
+                old_value = top_rec['current_value']
+                ideal_value = top_rec['suggested_value']
+
+                number_type = self.recipe['number_type']
+                new_value = None
+
+                if strategy == "adjust_optimal":
+                    new_value = ideal_value
+                    if not (1/bound <= ideal_value <= bound):
+                        print(f"    - [Adjust Optimal] Fixing {expert_id}/{node_id}: Warning - suggested value {new_value:.2f} is out of scale.")
+                    original_matrix[i, j] = number_type.from_crisp(new_value)
+                    original_matrix[j, i] = number_type.from_crisp(1 / new_value)
+                    change_made_in_cycle = True
+
+                elif strategy == "adjust_bounded":
+                    new_value = np.clip(ideal_value, 1/bound, bound)
+                    original_matrix[i, j] = number_type.from_crisp(new_value)
+                    original_matrix[j, i] = number_type.from_crisp(1 / new_value)
+                    change_made_in_cycle = True
+
+                elif strategy == "remove_and_complete":
+                    matrix_with_missing = original_matrix.copy()
+                    matrix_with_missing[i, j] = None
+                    matrix_with_missing[j, i] = None
+
+                    completed_numeric = complete_matrix(matrix_with_missing, method=completion_method)
+                    new_value = completed_numeric[i, j]
+
+                    n = original_matrix.shape[0]
+                    for r in range(n):
+                        for c in range(n):
+                            original_matrix[r, c] = number_type.from_crisp(completed_numeric[r, c])
+                    change_made_in_cycle = True
+
+                if change_made_in_cycle:
+                    log_key = f"{expert_id}_{node_id}"
+                    if log_key not in change_log: change_log[log_key] = []
+                    change_log[log_key].append({'from': old_value, 'to': new_value, 'pair': (i, j), 'cycle': revision_cycle + 1})
+
+            if change_made_in_cycle:
+                print("  - Cycle complete. Re-calculating weights and consistency for all experts...")
+                self.fit_weights(self.expert_matrices)
+            else:
+                print("  - Warning: No further improvements could be made. Halting revision process.")
+                break
+
+        else:
+            print(f"\n⚠️ Warning: Reached max_cycles ({max_cycles}) limit. Not all matrices may be consistent.")
+
+        final_inconsistent_count = 0
+        if self.consistency_report:
+            for report in self.consistency_report.values():
+                for metrics in report.values():
+                    cr_val = metrics.get('saaty_cr')
+                    if isinstance(cr_val, (float, np.floating)) and cr_val > final_target_cr:
+                        final_inconsistent_count += 1
+
+        if final_inconsistent_count > 0:
+            print(f"\n⚠️ Final Status: {final_inconsistent_count} matrices still exceed the CR target of {final_target_cr}.")
+        else:
+            print(f"\n✅ Final Status: All matrices were successfully revised to meet the consistency target.")
+
+        return change_log
+
+    def sanitize_expert_data(
+        self,
+        expert_matrices: Dict[str, List[np.ndarray]],
+        target_cr: float = 0.1,
+        max_cycles: int = 40,
+        strategy: Literal["adjust_bounded", "remove_and_complete"] = "adjust_bounded",
+        completion_method: str = "llsm"
+    ) -> Dict[str, List[np.ndarray]]:
+        """
+        Pre-processes expert matrices by enforcing consistency on each one individually.
+
+        This method follows a robust sanitization workflow:
+        1. Converts each fuzzy matrix to a crisp representation.
+        2. Iteratively revises the crisp matrix until it meets the target_cr.
+        3. Converts the now-consistent crisp matrix back to the original fuzzy type.
+
+        This is ideal for cleaning data from non-expert groups before aggregation.
+
+        Args:
+            expert_matrices: The raw dictionary of expert fuzzy matrices.
+            target_cr (float): The consistency threshold to achieve.
+            max_cycles (int): Max revision attempts per matrix.
+            strategy (str): The revision strategy to use on the crisp matrices.
+            completion_method (str): The completion method for the 'remove_and_complete' strategy.
+
+        Returns:
+            A new dictionary of expert matrices, where each matrix is now acceptably consistent.
+        """
+        print("\n--- Sanitizing Expert Data: Enforcing Consistency ---")
+
+        sanitized_matrices = {node_id: [] for node_id in expert_matrices}
+        original_number_type = self.recipe['number_type']
+        num_experts = len(list(expert_matrices.values())[0])
+
+        for i in range(num_experts):
+            expert_id = f"expert_{i+1}"
+            print(f"\nProcessing {expert_id}...")
+
+            # Create a temporary, single-expert pipeline that works with CRISP data
+            crisp_pipeline = Workflow(
+                root_node=self.model.root,
+                workflow_type=self.workflow_type,
+                group_strategy="aggregate_priorities", # Strategy doesn't matter for one expert
+                recipe={'number_type': Crisp}, # <-- Work in the crisp domain
+                alternatives=[alt.name for alt in self.model.alternatives]
+            )
+
+            # Build the set of matrices for this single expert
+            single_expert_matrices = {}
+            for node_id, matrices in expert_matrices.items():
+                # Defuzzify the matrix to create the crisp input
+                fuzzy_matrix = matrices[i]
+                crisp_matrix_raw = np.array([[cell.defuzzify() for cell in row] for row in fuzzy_matrix])
+                single_expert_matrices[node_id] = [crisp_matrix_raw]
+
+            # Fit weights to generate the initial consistency report for the crisp matrices
+            crisp_pipeline.fit_weights(expert_matrices=single_expert_matrices)
+
+            # Run the consistency revision on this expert's crisp data
+            crisp_pipeline.make_consistent(
+                target_cr=target_cr,
+                max_cycles=max_cycles,
+                strategy=strategy,
+                completion_method=completion_method
+            )
+
+            # Now, extract the cleaned matrices and convert them back to the original fuzzy type
+            for node_id in expert_matrices.keys():
+                # `crisp_pipeline.expert_matrices` holds the revised crisp matrices
+                consistent_crisp_matrix = crisp_pipeline.expert_matrices[node_id][0]
+
+                n = consistent_crisp_matrix.shape[0]
+                re_fuzzified_matrix = create_comparison_matrix(n, original_number_type)
+
+                for r in range(n):
+                    for c in range(n):
+                        # Convert each crisp value back to a fuzzy number
+                        # We use from_crisp to create a non-fuzzy fuzzy number (e.g., TFN(3,3,3))
+                        # This preserves the now-consistent ratio.
+                        crisp_val = consistent_crisp_matrix[r, c].value
+                        re_fuzzified_matrix[r, c] = original_number_type.from_crisp(crisp_val)
+
+                sanitized_matrices[node_id].append(re_fuzzified_matrix)
+
+        print("\n--- Sanitization Complete ---")
+        return sanitized_matrices

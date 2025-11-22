@@ -258,7 +258,7 @@ def test_pipeline_error_on_missing_data(hierarchy_structure, alternatives_list):
     # Fit weights, then try to score with missing performance scores
     pipeline.fit_weights(expert_matrices={"Goal": [create_matrix_from_list([2], TFN)]})
 
-    with pytest.raises(ValueError, match=re.escape("The 'scoring' workflow requires the 'performance_scores' argument to be provided to the .score() method.")):
+    with pytest.raises(ValueError, match=re.escape("Missing performance score for leaf node 'Price' in alternative 'Car A'. Use `alt.set_performance_score()`.")):
         pipeline.score()
 
 

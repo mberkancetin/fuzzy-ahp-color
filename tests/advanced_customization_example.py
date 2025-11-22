@@ -5,7 +5,7 @@ from multiAHPy.model import Hierarchy, Node
 from multiAHPy.matrix_builder import create_matrix_from_list
 from multiAHPy.aggregation import aggregate_matrices, register_aggregation_method
 from multiAHPy.weight_derivation import register_weight_method
-from multiAHPy.consistency import register_consistency_method
+from multiAHPy.consistency import register_consistency_method, CONSISTENCY_METHODS
 from typing import List, Type, Dict, Any
 
 # ==============================================================================
@@ -31,8 +31,8 @@ print("✅ Registered custom defuzzification method: 'pessimistic_mean'")
 # 1.2: Custom Consistency Index
 # A simple custom index that finds the max value in the defuzzified matrix,
 # as a rough measure of the largest single judgment.
-@register_consistency_method("max_element_index")
-def calculate_max_element_index(matrix: np.ndarray, consistency_method: str = 'centroid') -> float:
+@CONSISTENCY_METHODS.register("max_element_index")
+def calculate_max_element_index(matrix: np.ndarray, consistency_method: str = 'centroid', **kwargs) -> float:
     """Calculates the maximum off-diagonal element in the defuzzified matrix."""
     n = matrix.shape[0]
     if n <= 1:
@@ -150,7 +150,7 @@ model.set_alternative_matrix("Safety", agg_safety_matrix)
 
 # Calculate weights and scores using default methods
 model.calculate_weights(method="geometric_mean")
-model.calculate_alternative_scores(derivation_method="geometric_mean")
+model.rank_alternatives_by_comparison(derivation_method="geometric_mean")
 
 print("Rankings using default 'centroid' defuzzification:")
 print(model.get_rankings())
@@ -200,7 +200,7 @@ model.set_alternative_matrix("Safety", custom_agg_safety)
 # Calculate weights and scores using our new 'row_sum_norm' method
 print("\nCalculating weights with custom 'row_sum_norm' method...")
 model.calculate_weights(method="row_sum_norm")
-model.calculate_alternative_scores(derivation_method="row_sum_norm")
+model.rank_alternatives_by_comparison(derivation_method="row_sum_norm")
 
 # Get rankings using our new 'pessimistic_mean' defuzzification method
 print("\nRankings using custom 'pessimistic_mean' defuzzification:")
@@ -209,10 +209,11 @@ print(model.get_rankings(consistency_method='pessimistic_mean'))
 # Check consistency. The output should now include our custom index and use the new RI values.
 print("\nConsistency check with custom settings:")
 consistency_results_custom = model.check_consistency()
+print(consistency_results_custom['Price']['saaty_cr'])
 print(consistency_results_custom['Price']) # Show one result in detail
 
 print("-" * 50)
-print("\n🎉 Customization test complete! Notice the different rankings and consistency scores.")
+print("\nCustomization test complete! Notice the different rankings and consistency scores.")
 
 # Optional: Reset config to defaults if you continue working in the same session
 ahp.configure_parameters.reset_to_defaults()

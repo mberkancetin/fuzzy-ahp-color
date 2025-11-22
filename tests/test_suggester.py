@@ -77,7 +77,7 @@ def test_suggester_ifn_recipe():
 
     assert recipe['number_type'] == IFN
     assert recipe['aggregation_method'] == 'ifwa'
-    assert recipe['consistency_method'] == 'score'
+    assert recipe['consistency_method'] == 'normalized_score'
 
 def test_suggester_invalid_input():
     """
