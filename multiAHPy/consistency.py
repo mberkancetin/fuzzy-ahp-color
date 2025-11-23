@@ -151,18 +151,16 @@ class Consistency:
         if n <= 2:
             return 0.0
 
-        crisp_matrix = np.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                cell = matrix[i, j]
-                if hasattr(cell, 'defuzzify'):
-                    crisp_matrix[i, j] = cell.defuzzify(method=consistency_method)
-                else:
-                    crisp_matrix[i, j] = float(cell)
+        first_element = matrix[0, 0]
+        if hasattr(first_element, 'defuzzify'):
+            crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix], dtype=float)
+        elif isinstance(first_element, (int, float, np.number)):
+            crisp_matrix = matrix.astype(float)
+        else:
+            raise TypeError(f"Unsupported matrix element type for consistency check: {type(first_element)}")
 
         if np.any(crisp_matrix <= 0):
-            raise ValueError("Comparison matrix contains non-positive values after defuzzification")
-
+            return np.inf
         # Calculate weights using numerically stable geometric mean
         log_matrix = np.log(crisp_matrix)
         row_geometric_means = np.exp(np.mean(log_matrix, axis=1))
@@ -202,14 +200,14 @@ class Consistency:
         n = matrix.shape[0]
         if n <= 2: return 0.0
 
-        crisp_matrix = np.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                cell = matrix[i, j]
-                if hasattr(cell, 'defuzzify'):
-                    crisp_matrix[i, j] = cell.defuzzify(method=consistency_method)
-                else:
-                    crisp_matrix[i, j] = float(cell)
+        first_element = matrix[0, 0]
+        if hasattr(first_element, 'defuzzify'):
+            crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix], dtype=float)
+        elif isinstance(first_element, (int, float, np.number)):
+            crisp_matrix = matrix.astype(float)
+        else:
+            raise TypeError(f"Unsupported matrix element type for consistency check: {type(first_element)}")
+
 
         if np.any(crisp_matrix <= 0): return np.inf
 
@@ -463,6 +461,15 @@ class Consistency:
         matrix = node.comparison_matrix
         crisp_matrix = np.array([[c.defuzzify(method=consistency_method) for c in row] for row in matrix], dtype=float)
         n = crisp_matrix.shape[0]
+
+        first_element = matrix[0, 0]
+        if hasattr(first_element, 'defuzzify'):
+            crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix], dtype=float)
+        elif isinstance(first_element, (int, float, np.number)):
+            crisp_matrix = matrix.astype(float)
+        else:
+            raise TypeError(f"Unsupported matrix element type for consistency check: {type(first_element)}")
+
 
         sanitized_matrix = np.maximum(crisp_matrix, 1e-9)
 
