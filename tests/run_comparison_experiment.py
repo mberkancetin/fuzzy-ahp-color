@@ -127,7 +127,7 @@ if __name__ == "__main__":
 
     # --- SCENARIO 2: GMR (Rebuild Consistent) ---
     print("\n--- SCENARIO 2: Sanitizing with 'rebuild_consistent' (GMR) ---")
-    sanitizer_gmr = DataSanitizer(strategy="rebuild_consistent", target_cr=0.1)
+    sanitizer_gmr = DataSanitizer(strategy="rebuild_consistent", target_cr=0.1, scale="wide")
     sanitized_matrices_gmr, _ = sanitizer_gmr.transform(RAW_TFN_MATRICES, HIERARCHY_ROOT, TFN)
 
     pipeline_gmr = ahp.Workflow(
@@ -153,7 +153,7 @@ if __name__ == "__main__":
 
     # --- SCENARIO 3: PITR (Adjust Persistent) ---
     print("\n--- SCENARIO 3: Sanitizing with 'adjust_persistent' (PITR) ---")
-    sanitizer_pitr = DataSanitizer(strategy="adjust_persistent", target_cr=0.1, max_cycles=50)
+    sanitizer_pitr = DataSanitizer(strategy="adjust_persistent", target_cr=0.1, max_cycles=50, scale="wide")
     sanitized_matrices_pitr, _ = sanitizer_pitr.transform(RAW_TFN_MATRICES, HIERARCHY_ROOT, TFN)
 
     pipeline_pitr = ahp.Workflow(
@@ -195,3 +195,4 @@ if __name__ == "__main__":
 
     print(results_df)
     print("="*80)
+    print(sanitized_matrices_pitr)

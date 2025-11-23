@@ -7,7 +7,7 @@ from .model import Hierarchy, Node
 from .types import Crisp
 from .consistency import Consistency
 from .completion import complete_matrix
-from .matrix_builder import rebuild_consistent_matrix, rebuild_from_eigenvector
+from .matrix_builder import FuzzyScale, rebuild_consistent_matrix, rebuild_from_eigenvector
 
 SANITIZATION_STRATEGIES: Dict[str, Callable] = {}
 
@@ -26,7 +26,7 @@ class DataSanitizer:
         Args:
             strategy (str): The name of the registered sanitization strategy to use.
             **strategy_kwargs: Keyword arguments to pass to the chosen strategy function
-                               (e.g., `target_cr`, `max_cycles`, `completion_method`).
+                               (e.g., `target_cr`, `max_cycles`, `scale`).
         """
         if strategy not in SANITIZATION_STRATEGIES:
             raise ValueError(f"Unknown sanitization strategy '{strategy}'. Available: {list(SANITIZATION_STRATEGIES.keys())}")
@@ -41,22 +41,20 @@ class DataSanitizer:
     ) -> tuple[Dict[str, List[np.ndarray]], Dict[str, Any]]:
         """
         Applies the chosen sanitization strategy to a set of expert matrices.
-
-        Returns:
-            A tuple containing:
-            1. The new dictionary of sanitized, acceptably consistent matrices.
-            2. A log of all changes made.
         """
         print(f"\n--- Sanitizing Expert Data (Strategy: {self.strategy}) ---")
 
         strategy_func = SANITIZATION_STRATEGIES[self.strategy]
 
-        sanitized_matrices, change_log = strategy_func(
-            raw_matrices=raw_expert_matrices,
-            root_node=root_node,
-            target_number_type=target_number_type,
+        all_args = {
+            "raw_matrices": raw_expert_matrices,
+            "root_node": root_node,
+            "target_number_type": target_number_type,
             **self.strategy_kwargs
-        )
+        }
+
+        sanitized_matrices, change_log = strategy_func(**all_args)
+
         print("--- Sanitization Complete ---")
         return sanitized_matrices, change_log
 
@@ -155,7 +153,7 @@ def _perform_iterative_revision(
 def iterative_adjustment_strategy(
     raw_matrices: Dict, root_node: Node, target_number_type: type,
     target_cr: float = 0.1, max_cycles: int = 20, bound: float = 9.0,
-    strategy: str = "adjust_bounded", **kwargs
+    strategy: str = "adjust_bounded", scale: str = 'linear', **kwargs
 ) -> tuple[Dict, Dict]:
     """
     Sanitizes matrices using an iterative adjustment method on a crisp representation.
@@ -181,6 +179,7 @@ def iterative_adjustment_strategy(
 
     # 3. Re-fuzzify the results
     sanitized_fuzzy_matrices = {node_id: [] for node_id in raw_matrices}
+    num_experts = len(list(raw_matrices.values())[0])
     for i in range(num_experts):
         for node_id in raw_matrices.keys():
             crisp_matrix = consistent_crisp_matrices[i][node_id]
@@ -188,7 +187,12 @@ def iterative_adjustment_strategy(
             re_fuzzified_matrix = np.empty((n, n), dtype=object)
             for r in range(n):
                 for c in range(n):
-                    re_fuzzified_matrix[r, c] = target_number_type.from_crisp(crisp_matrix[r, c].value)
+                    crisp_value = crisp_matrix[r, c].value
+                    re_fuzzified_matrix[r, c] = FuzzyScale.get_fuzzy_number(
+                        crisp_value=crisp_value,
+                        number_type=target_number_type,
+                        scale=scale
+                    )
             sanitized_fuzzy_matrices[node_id].append(re_fuzzified_matrix)
 
     return sanitized_fuzzy_matrices, change_log
@@ -196,8 +200,14 @@ def iterative_adjustment_strategy(
 
 @register_sanitization_strategy("adjust_persistent")
 def adjust_persistent_strategy(
-    raw_matrices: Dict, root_node: Node, target_number_type: type,
-    target_cr: float = 0.1, max_cycles: int = 40, bound: float = 9.0, **kwargs
+    raw_matrices: Dict,
+    root_node: Node,
+    target_number_type: type,
+    target_cr: float = 0.1,
+    max_cycles: int = 40,
+    bound: float = 9.0,
+    scale: str = 'linear',
+    **kwargs
 ) -> tuple[Dict, Dict]:
     """
     Sanitizes matrices using a persistent iterative adjustment method.
@@ -308,7 +318,9 @@ def adjust_persistent_strategy(
             re_fuzzified_matrix = np.empty((n, n), dtype=object)
             for r in range(n):
                 for c in range(n):
-                    re_fuzzified_matrix[r, c] = target_number_type.from_crisp(consistent_crisp_matrix[r, c].value)
+                    re_fuzzified_matrix[r, c] = FuzzyScale.get_fuzzy_number(
+                        consistent_crisp_matrix[r, c].value, target_number_type, scale=scale
+                    )
             sanitized_fuzzy_matrices[node_id].append(re_fuzzified_matrix)
 
     # If any expert failed the post-check, raise an error to fail the test.
@@ -320,8 +332,14 @@ def adjust_persistent_strategy(
 
 @register_sanitization_strategy("adjust_triads")
 def adjust_triads_strategy(
-    raw_matrices: Dict, root_node: Node, target_number_type: type,
-    target_cr: float = 0.1, max_cycles: int = 20, bound: float = 9.0, **kwargs
+    raw_matrices: Dict,
+    root_node: Node,
+    target_number_type: type,
+    target_cr: float = 0.1,
+    max_cycles: int = 20,
+    bound: float = 9.0,
+    scale: str = 'linear',
+    **kwargs
 ) -> tuple[Dict, Dict]:
     """
     Sanitizes matrices using an iterative Triad-Based Adjustment method.
@@ -431,8 +449,9 @@ def adjust_triads_strategy(
             re_fuzzified_matrix = np.empty((n, n), dtype=object)
             for r in range(n):
                 for c in range(n):
-                    # Extract the float value from the Crisp object before re-fuzzifying
-                    re_fuzzified_matrix[r, c] = target_number_type.from_crisp(consistent_crisp_matrix[r, c].value)
+                    re_fuzzified_matrix[r, c] = FuzzyScale.get_fuzzy_number(
+                        consistent_crisp_matrix[r, c].value, target_number_type, scale=scale
+                    )
             sanitized_fuzzy_matrices[node_id].append(re_fuzzified_matrix)
 
     # If any expert's sanitization failed, raise an error to fail the test.
@@ -450,6 +469,7 @@ def rebuild_consistent_strategy(
     target_cr: float,
     completion_method: str = 'llsm_type_agnostic',
     consistency_check: List[str] = ["saaty_cr", "gci"],
+    scale: str = 'linear',
     **kwargs
 ) -> tuple[Dict, Dict]:
     """
@@ -479,7 +499,11 @@ def rebuild_consistent_strategy(
                 re_fuzzified_matrix = np.empty((n, n), dtype=object)
                 for r in range(n):
                     for c in range(n):
-                        re_fuzzified_matrix[r, c] = target_number_type.from_crisp(consistent_crisp[r,c])
+                        re_fuzzified_matrix[r, c] = FuzzyScale.get_fuzzy_number(
+                            crisp_value=consistent_crisp[r, c],
+                            number_type=target_number_type,
+                            scale=scale
+                        )
                 sanitized_matrices[node_id][i] = re_fuzzified_matrix
 
     return sanitized_matrices, change_log
@@ -492,6 +516,7 @@ def rebuild_eigenvector_strategy(
     target_number_type: type,
     target_cr: float,
     consistency_check: List[str] = ["saaty_cr", "gci"],
+    scale: str = 'linear',
     **kwargs
 ) -> tuple[Dict, Dict]:
     """
@@ -519,7 +544,9 @@ def rebuild_eigenvector_strategy(
                 re_fuzzified_matrix = np.empty((n, n), dtype=object)
                 for r in range(n):
                     for c in range(n):
-                        re_fuzzified_matrix[r, c] = target_number_type.from_crisp(consistent_crisp[r,c])
+                        re_fuzzified_matrix[r, c] = FuzzyScale.get_fuzzy_number(
+                        consistent_crisp[r, c], target_number_type, scale=scale
+                    )
                 sanitized_matrices[node_id][i] = re_fuzzified_matrix
 
     return sanitized_matrices, change_log
