@@ -172,7 +172,6 @@ class Consistency:
         Aw = crisp_matrix @ weights
 
         if np.any(weights == 0):
-            from .config import configure_parameters
             final_epsilon = epsilon if epsilon is not None else configure_parameters.LOG_EPSILON
             weights = np.maximum(weights, final_epsilon)
 
@@ -264,11 +263,53 @@ class Consistency:
     def check_model_consistency(
         model: Hierarchy,
         consistency_method: str = 'centroid',
-        saaty_cr_threshold: float | None = None
+        saaty_cr_threshold: float | None = None,
+        required_indices: List[str] | None = None
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Performs a comprehensive consistency check on all matrices in the model by
-        running all registered consistency calculation methods.
+        Performs a comprehensive, configurable consistency check on all matrices in the model.
+
+        This method traverses the hierarchy and runs all registered consistency algorithms
+        (e.g., 'saaty_cr', 'gci') on each comparison matrix. It then determines an overall
+        'is_consistent' status based on a flexible set of requirements.
+
+        .. rubric:: Academic Description
+
+        The concept of a single, universally accepted measure of matrix consistency is
+        a subject of ongoing academic debate. Saaty's (1980) Consistency Ratio (CR) is
+        the most widely known, but alternatives such as the Geometric Consistency Index (GCI)
+        by Aguarón & Moreno-Jiménez (2003) are often preferred for their mathematical
+        properties, especially when using the geometric mean for weight derivation.
+
+        This function embraces this diversity by adopting a modular approach. It calculates
+        all available consistency indices registered in the library. Crucially, it allows
+        the researcher to define what constitutes "consistency" for their specific study via
+        the `required_indices` parameter. This enables various research scenarios:
+        - Replicating studies that rely solely on Saaty's CR.
+        - Performing analyses where only the GCI is considered relevant.
+        - Defining a stricter consistency requirement where multiple indices must all
+        pass their respective thresholds.
+
+        By default, if no indices are specified, the function adheres to a common modern
+        practice of checking both Saaty's CR and the GCI. A matrix is only flagged as
+        `is_consistent: True` if all required numerical indices are below their established
+        thresholds and no registered index calculation results in a failure.
+
+        Args:
+            model (Hierarchy): The Hierarchy instance to check.
+            consistency_method (str, optional): The defuzzification method used for
+                indices that require a crisp matrix. Defaults to 'centroid'.
+            saaty_cr_threshold (float, optional): The acceptable threshold for Saaty's CR.
+                If None, it uses the value from the global `configure_parameters`.
+            required_indices (List[str], optional): A list of consistency index names
+                that MUST pass for a matrix to be considered consistent. If None, it
+                defaults to checking all primary numerical indices available (typically
+                'saaty_cr' and 'gci').
+
+        Returns:
+            Dict[str, Dict[str, Any]]: A dictionary where keys are node IDs and values
+            are a detailed dictionary of all calculated consistency metrics and the
+            overall `is_consistent` status.
         """
         final_cr_threshold = saaty_cr_threshold if saaty_cr_threshold is not None else configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
 
@@ -306,30 +347,40 @@ class Consistency:
                 except Exception as e:
                     node_results[name] = f"Error: {e}"
 
-            gci_threshold = Consistency._get_gci_threshold(n)
+            indices_to_check = required_indices
+            if indices_to_check is None:
+                indices_to_check = []
+                if "saaty_cr" in CONSISTENCY_METHODS: indices_to_check.append("saaty_cr")
+                if "gci" in CONSISTENCY_METHODS: indices_to_check.append("gci")
 
-            saaty_cr_val = node_results.get("saaty_cr")
-            gci_val = node_results.get("gci")
+            all_required_passed = True
 
-            is_cr_ok = isinstance(saaty_cr_val, (float, np.floating)) and saaty_cr_val <= final_cr_threshold
-            is_gci_ok = isinstance(gci_val, (float, np.floating)) and gci_val <= gci_threshold
-
-            all_checks_passed = is_cr_ok and is_gci_ok
-
-            for key, value in node_results.items():
+            for index_name in indices_to_check:
+                value = node_results.get(index_name)
                 if isinstance(value, str) and value.lower().startswith(('error', 'failed')):
-                    all_checks_passed = False
+                    all_required_passed = False
                     break
 
-            node_results["is_consistent"] = all_checks_passed
+            if all_required_passed:
+                if "saaty_cr" in indices_to_check:
+                    saaty_cr_val = node_results.get("saaty_cr")
+                    if not (isinstance(saaty_cr_val, (float, np.floating)) and saaty_cr_val <= final_cr_threshold):
+                        all_required_passed = False
+
+                if "gci" in indices_to_check:
+                    gci_val = node_results.get("gci")
+                    gci_threshold = Consistency._get_gci_threshold(n)
+                    if not (isinstance(gci_val, (float, np.floating)) and gci_val <= gci_threshold):
+                        all_required_passed = False
+
+            node_results["is_consistent"] = all_required_passed
             node_results["saaty_cr_threshold"] = final_cr_threshold
-            node_results["gci_threshold"] = gci_threshold
+            node_results["gci_threshold"] = Consistency._get_gci_threshold(n) # Report for context
 
             results[node.id] = node_results
 
         _recursive_check(model.root)
         return results
-
 
     @staticmethod
     def check_group_consistency(
@@ -434,7 +485,7 @@ class Consistency:
                     continue
 
                 expected_val = weights[i] / weights[j]
-                actual_val = crisp_matrix[i, j] 
+                actual_val = crisp_matrix[i, j]
 
                 if abs(expected_val) > 1e-9:
                     error = abs(actual_val - expected_val) / expected_val

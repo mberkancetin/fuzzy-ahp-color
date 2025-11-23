@@ -18,10 +18,10 @@ def test_sanitizer_init_fails_with_bad_strategy():
     with pytest.raises(ValueError, match="Unknown sanitization strategy 'bad_strategy'"):
         DataSanitizer(strategy="bad_strategy")
 
-@pytest.mark.parametrize("strategy", ["adjust_persistent", "adjust_persistent"])
+@pytest.mark.parametrize("strategy", ["adjust_persistent", "adjust_triads"])
 def test_iterative_sanitization_strategies(strategy, root_node, raw_tfn_matrices):
     """
-    Tests the iterative sanitization strategies ('adjust_persistent', 'adjust_persistent')
+    Tests the iterative sanitization strategies ('adjust_persistent', 'adjust_triads')
     to ensure they produce a consistent set of matrices.
     """
     print(f"\n--- Testing Sanitizer with strategy: '{strategy}' ---")

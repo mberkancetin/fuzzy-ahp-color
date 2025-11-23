@@ -7,6 +7,7 @@ from .model import Hierarchy, Node
 from .types import Crisp
 from .consistency import Consistency
 from .completion import complete_matrix
+from .matrix_builder import rebuild_consistent_matrix, rebuild_from_eigenvector
 
 SANITIZATION_STRATEGIES: Dict[str, Callable] = {}
 
@@ -101,8 +102,12 @@ def _perform_iterative_revision(
                     worst_matrix_info = {"node_id": node_id, "cr": cr_val}
 
             if worst_matrix_info is None:
-                print(f"    - ✅ All matrices for {expert_id} are now consistent.")
-                break
+                if stagnated_matrices_for_expert:
+                    print(f"    - ❌ Some matrices for {expert_id} are not consistent.")
+                    break
+                else:
+                    print(f"    - ✅ All matrices for {expert_id} are now consistent.")
+                    break
 
             node_id_to_fix = worst_matrix_info['node_id']
             print(f"    - Cycle {revision_cycle + 1}/{max_cycles}: Fixing '{node_id_to_fix}' (CR: {worst_matrix_info['cr']:.4f})")
@@ -146,6 +151,7 @@ def _perform_iterative_revision(
 
 @register_sanitization_strategy("adjust_optimal")
 @register_sanitization_strategy("adjust_bounded")
+@register_sanitization_strategy("simple_iterative")
 def iterative_adjustment_strategy(
     raw_matrices: Dict, root_node: Node, target_number_type: type,
     target_cr: float = 0.1, max_cycles: int = 20, bound: float = 9.0,
@@ -312,10 +318,139 @@ def adjust_persistent_strategy(
     return sanitized_fuzzy_matrices, change_log
 
 
+@register_sanitization_strategy("adjust_triads")
+def adjust_triads_strategy(
+    raw_matrices: Dict, root_node: Node, target_number_type: type,
+    target_cr: float = 0.1, max_cycles: int = 20, bound: float = 9.0, **kwargs
+) -> tuple[Dict, Dict]:
+    """
+    Sanitizes matrices using an iterative Triad-Based Adjustment method.
+    """
+    change_log = {}
+
+    # 1. Defuzzify all matrices to a list of crisp matrix dictionaries
+    expert_crisp_matrices = []
+    num_experts = len(list(raw_matrices.values())[0])
+    for i in range(num_experts):
+        expert_dict = {
+            node_id: np.array([[Crisp(cell.defuzzify()) for cell in row] for row in matrices[i]], dtype=object)
+            for node_id, matrices in raw_matrices.items()
+        }
+        expert_crisp_matrices.append(expert_dict)
+
+    # 2. Iterate through each expert and clean their set of crisp matrices
+    for i in range(num_experts):
+        expert_id = f"expert_{i+1}"
+        print(f"\n  - Sanitizing matrices for {expert_id} (Triad Strategy)...")
+        current_expert_matrices = expert_crisp_matrices[i]
+        expert_change_log = {}
+
+        for revision_cycle in range(max_cycles):
+            temp_model = Hierarchy(root_node, Crisp)
+            for node_id, matrix in current_expert_matrices.items():
+                temp_model.set_comparison_matrix(node_id, matrix)
+            consistency_report = Consistency.check_model_consistency(temp_model, saaty_cr_threshold=target_cr)
+
+            worst_matrix_info = None
+            max_cr = target_cr
+            for node_id, metrics in consistency_report.items():
+                cr_val = metrics.get('saaty_cr')
+                if isinstance(cr_val, (float, np.floating)) and cr_val > max_cr:
+                    max_cr = cr_val
+                    worst_matrix_info = {"node_id": node_id, "cr": cr_val}
+
+            if worst_matrix_info is None:
+                print(f"    - ✅ All matrices for {expert_id} are now consistent.")
+                break
+
+            node_id_to_fix = worst_matrix_info['node_id']
+            print(f"    - Cycle {revision_cycle + 1}/{max_cycles}: Targeting '{node_id_to_fix}' (CR: {worst_matrix_info['cr']:.4f})")
+
+            matrix_to_revise = current_expert_matrices[node_id_to_fix]
+            crisp_matrix = np.array([[c.value for c in row] for row in matrix_to_revise], dtype=float)
+            n = crisp_matrix.shape[0]
+
+            max_triad_error = 1.0
+            worst_triad = None
+            for i_ in range(n):
+                for j_ in range(n):
+                    for k_ in range(n):
+                        if i_ == j_ or j_ == k_ or i_ == k_: continue
+                        a_ij, a_jk, a_ik = crisp_matrix[i_, j_], crisp_matrix[j_, k_], crisp_matrix[i_, k_]
+                        epsilon = (a_ij * a_jk) / a_ik
+                        error = max(epsilon, 1.0 / epsilon)
+                        if error > max_triad_error:
+                            max_triad_error = error
+                            worst_triad = (i_, j_, k_, epsilon)
+
+            if worst_triad is None:
+                print(f"    - ⚠️ Warning: Could not find inconsistent triad in {node_id_to_fix}. Halting for this expert.")
+                break
+
+            i_, j_, k_, epsilon = worst_triad
+            delta = (1.0 / epsilon) ** (1/3)
+
+            old_ij, old_jk, old_ik = crisp_matrix[i_, j_], crisp_matrix[j_, k_], crisp_matrix[i_, k_]
+            new_ij = np.clip(old_ij * delta, 1/bound, bound)
+            new_jk = np.clip(old_jk * delta, 1/bound, bound)
+            new_ik = np.clip(old_ik / delta, 1/bound, bound)
+
+            matrix_to_revise[i_, j_] = Crisp(new_ij); matrix_to_revise[j_, i_] = Crisp(1/new_ij)
+            matrix_to_revise[j_, k_] = Crisp(new_jk); matrix_to_revise[k_, j_] = Crisp(1/new_jk)
+            matrix_to_revise[i_, k_] = Crisp(new_ik); matrix_to_revise[k_, i_] = Crisp(1/new_ik)
+
+            if node_id_to_fix not in expert_change_log: expert_change_log[node_id_to_fix] = []
+            expert_change_log[node_id_to_fix].append({'triad': (i_,j_,k_), 'cycle': revision_cycle + 1})
+        else:
+            print(f"    - ⚠️ Warning: Reached max_cycles for {expert_id}. Some matrices may still be inconsistent.")
+
+        change_log[expert_id] = expert_change_log
+
+    sanitized_fuzzy_matrices = {node_id: [] for node_id in raw_matrices}
+    all_sanitization_successful = True
+
+    for i in range(num_experts):
+        expert_id = f"expert_{i+1}"
+        # Create one final temp model for this expert to verify their final state
+        temp_model = Hierarchy(root_node, Crisp)
+        for node_id, matrix in expert_crisp_matrices[i].items():
+            temp_model.set_comparison_matrix(node_id, matrix)
+        final_report = Consistency.check_model_consistency(temp_model, saaty_cr_threshold=target_cr)
+
+        # Check if every matrix for this expert is now consistent
+        for node_id, metrics in final_report.items():
+            cr_val = metrics.get('saaty_cr')
+            if not (isinstance(cr_val, (float, np.floating)) and cr_val <= target_cr):
+                all_sanitization_successful = False
+                print(f"    - ❌ FAILURE POST-CHECK: Matrix for {expert_id}/{node_id} is still inconsistent (CR: {metrics.get('saaty_cr', 99):.4f})")
+
+        # Convert the (now hopefully consistent) crisp matrices back to the original fuzzy type
+        for node_id in raw_matrices.keys():
+            consistent_crisp_matrix = expert_crisp_matrices[i][node_id]
+            n = consistent_crisp_matrix.shape[0]
+            re_fuzzified_matrix = np.empty((n, n), dtype=object)
+            for r in range(n):
+                for c in range(n):
+                    # Extract the float value from the Crisp object before re-fuzzifying
+                    re_fuzzified_matrix[r, c] = target_number_type.from_crisp(consistent_crisp_matrix[r, c].value)
+            sanitized_fuzzy_matrices[node_id].append(re_fuzzified_matrix)
+
+    # If any expert's sanitization failed, raise an error to fail the test.
+    if not all_sanitization_successful:
+        raise AssertionError("Sanitization failed. Not all expert matrices could be made consistent within the given cycle limit.")
+
+    return sanitized_fuzzy_matrices, change_log
+
+
 @register_sanitization_strategy("rebuild_consistent")
 def rebuild_consistent_strategy(
-    raw_matrices: Dict, root_node: Node, target_number_type: type,
-    target_cr: float, completion_method: str = 'llsm_type_agnostic', **kwargs
+    raw_matrices: Dict,
+    root_node: Node,
+    target_number_type: type,
+    target_cr: float,
+    completion_method: str = 'llsm_type_agnostic',
+    consistency_check: List[str] = ["saaty_cr", "gci"],
+    **kwargs
 ) -> tuple[Dict, Dict]:
     """
     A one-shot method that rebuilds each inconsistent matrix to be perfectly consistent.
@@ -332,13 +467,53 @@ def rebuild_consistent_strategy(
 
             temp_model = Hierarchy(root_node, target_number_type)
             temp_model.set_comparison_matrix(node_id, matrix_to_check)
-            report = temp_model.check_consistency()
+            report = temp_model.check_consistency(required_indices=consistency_check)
 
             if report and node_id in report and report[node_id].get('saaty_cr', 0) > target_cr:
                 print(f"  - Rebuilding matrix for expert_{i+1}/{node_id} (CR={report[node_id]['saaty_cr']:.3f})")
                 crisp_matrix = np.array([[c.defuzzify() for c in row] for row in matrix_to_check], dtype=float)
 
                 consistent_crisp = rebuild_consistent_matrix(crisp_matrix)
+
+                n = consistent_crisp.shape[0]
+                re_fuzzified_matrix = np.empty((n, n), dtype=object)
+                for r in range(n):
+                    for c in range(n):
+                        re_fuzzified_matrix[r, c] = target_number_type.from_crisp(consistent_crisp[r,c])
+                sanitized_matrices[node_id][i] = re_fuzzified_matrix
+
+    return sanitized_matrices, change_log
+
+
+@register_sanitization_strategy("rebuild_eigenvector")
+def rebuild_eigenvector_strategy(
+    raw_matrices: Dict,
+    root_node: Node,
+    target_number_type: type,
+    target_cr: float,
+    consistency_check: List[str] = ["saaty_cr", "gci"],
+    **kwargs
+) -> tuple[Dict, Dict]:
+    """
+    A one-shot method that rebuilds each inconsistent matrix to be perfectly
+    consistent based on its principal eigenvector weights.
+    """
+    change_log = {"info": f"Rebuilt all matrices with CR > {target_cr} using eigenvector reconstruction."}
+    sanitized_matrices = copy.deepcopy(raw_matrices)
+    num_experts = len(list(raw_matrices.values())[0])
+
+    for i in range(num_experts):
+        for node_id, matrices in raw_matrices.items():
+            matrix_to_check = matrices[i]
+            temp_model = Hierarchy(root_node, target_number_type)
+            temp_model.set_comparison_matrix(node_id, matrix_to_check)
+            report = temp_model.check_consistency(required_indices=consistency_check)
+
+            if report and node_id in report and report[node_id].get('saaty_cr', 0) > target_cr:
+                print(f"  - Rebuilding matrix for expert_{i+1}/{node_id} (CR={report[node_id]['saaty_cr']:.3f}) via Eigenvector")
+
+                crisp_matrix = np.array([[c.defuzzify() for c in row] for row in matrix_to_check], dtype=float)
+                consistent_crisp = rebuild_from_eigenvector(crisp_matrix)
 
                 n = consistent_crisp.shape[0]
                 re_fuzzified_matrix = np.empty((n, n), dtype=object)

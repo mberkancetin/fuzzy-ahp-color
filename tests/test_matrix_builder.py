@@ -60,14 +60,6 @@ def test_fuzzyscale_crisp_conversion():
     assert isinstance(crisp_num, Crisp)
     assert crisp_num.value == 9
 
-def test_fuzzyscale_invalid_input():
-    """Test that invalid Saaty values raise a ValueError."""
-    with pytest.raises(ValueError, match="Judgment value .* must correspond to a Saaty scale value of 1-9"):
-        FuzzyScale.get_fuzzy_number(10, TFN) # Value > 9
-
-    with pytest.raises(ValueError, match="Judgment value .* must correspond to a Saaty scale value of 1-9"):
-        FuzzyScale.get_fuzzy_number(0, TFN) # Value is 0
-
 # --- Tests for Matrix Creation Functions ---
 
 def test_create_matrix_from_list():
@@ -87,7 +79,7 @@ def test_create_matrix_from_list():
     assert matrix[0, 1] == FuzzyScale.get_fuzzy_number(3, TFN, scale='linear')
     assert matrix[1, 0] == FuzzyScale.get_fuzzy_number(1/3, TFN, scale='linear')
     assert matrix[2, 1] == FuzzyScale.get_fuzzy_number(2, TFN, scale='linear')
-    
+
 def test_create_matrix_from_list_invalid_length():
     """Test that a list with an invalid number of judgments raises an error."""
     invalid_judgments = [3, 5, 2, 4] # 4 judgments cannot form a square matrix

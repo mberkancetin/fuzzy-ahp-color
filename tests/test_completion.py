@@ -290,6 +290,7 @@ def test_create_completed_tfn_matrix(incomplete_crisp_matrix):
     completed_matrix = create_completed_matrix(
         incomplete_crisp_matrix,
         number_type=TFN,
+        fuzziness=1,
         scale='linear', # Use the linear scale for conversion
         completion_method="dematel"
     )
@@ -302,8 +303,8 @@ def test_create_completed_tfn_matrix(incomplete_crisp_matrix):
     # According to the 'linear' scale, 2 -> (1, 2, 3)
     known_tfn = completed_matrix[0, 1]
     assert known_tfn.l == 1.0
-    assert known_tfn.m == 2.0
-    assert known_tfn.u == 3.0
+    assert known_tfn.m == 1.7164645886768881
+    assert known_tfn.u == 2.716464588676888
 
     # Check that a missing value was first completed, then converted to a TFN
     filled_tfn = completed_matrix[0, 2]

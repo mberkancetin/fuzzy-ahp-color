@@ -47,11 +47,11 @@ def sample_tfn_model() -> Hierarchy:
 
     # Set criteria/sub-criteria comparison matrices
     crit_judgments = {("Cost", "Quality"): 2}
-    crit_matrix = create_matrix_from_judgments(crit_judgments, criteria, TFN)
+    crit_matrix = create_matrix_from_judgments(crit_judgments, criteria, TFN, fuzziness=1)
     model.set_comparison_matrix("Goal", crit_matrix)
 
     sub_crit_judgments = {("Purchase Price", "Maintenance"): 3}
-    sub_crit_matrix = create_matrix_from_judgments(sub_crit_judgments, sub_criteria_cost, TFN)
+    sub_crit_matrix = create_matrix_from_judgments(sub_crit_judgments, sub_criteria_cost, TFN, fuzziness=1)
     model.set_comparison_matrix("Cost", sub_crit_matrix)
 
     # Judgments for alternatives under each leaf criterion
@@ -60,13 +60,13 @@ def sample_tfn_model() -> Hierarchy:
     alt_vs_quality = {("Option A", "Option B"): 5}   # Option A is much better on quality
 
     # Create and set each matrix
-    matrix_price = create_matrix_from_judgments(alt_vs_purchase_price, alternatives, TFN)
+    matrix_price = create_matrix_from_judgments(alt_vs_purchase_price, alternatives, TFN, fuzziness=1)
     model.set_alternative_matrix("Purchase Price", matrix_price)
 
-    matrix_maint = create_matrix_from_judgments(alt_vs_maintenance, alternatives, TFN)
+    matrix_maint = create_matrix_from_judgments(alt_vs_maintenance, alternatives, TFN, fuzziness=1)
     model.set_alternative_matrix("Maintenance", matrix_maint)
 
-    matrix_qual = create_matrix_from_judgments(alt_vs_quality, alternatives, TFN)
+    matrix_qual = create_matrix_from_judgments(alt_vs_quality, alternatives, TFN, fuzziness=1)
     model.set_alternative_matrix("Quality", matrix_qual)
 
     return model

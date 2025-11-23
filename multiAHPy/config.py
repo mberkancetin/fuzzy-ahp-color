@@ -1,4 +1,124 @@
 from typing import Dict, Tuple, Callable
+import numpy as np
+
+
+ScaleFunction = Callable[[float], Tuple[float, ...]]
+
+
+def linear_tfn_scale(value: float) -> Tuple[float, float, float]:
+    """
+    A TFN scale where the spread is consistently +/- 1 from the value,
+    with bounds clipped to the [1, 9] Saaty scale.
+    """
+    v = float(value)
+    m = np.clip(v, 1, 9)
+    l = m - 1
+    u = m + 1
+    return (max(1.0, l), m, min(9.0, u))
+
+def wide_tfn_scale(value: float) -> Tuple[float, float, float]:
+    """
+    A TFN scale with a wider, asymmetric spread of -1, +2.
+    """
+    v = float(value)
+    m = np.clip(v, 1, 9)
+    l = m - 1
+    u = m + 2
+    return (max(1.0, l), m, min(9.0, u))
+
+def narrow_tfn_scale(value: float) -> Tuple[float, float, float]:
+    """
+    A TFN scale with a consistent, narrow spread of +/- 0.5.
+    """
+    v = float(value)
+    m = np.clip(v, 1, 9)
+    l = m - 0.5
+    u = m + 0.5
+    return (max(1.0, l), m, min(9.0, u))
+
+def asymptotic_tfn_scale(value: float) -> Tuple[float, float, float]:
+    """
+    A sophisticated TFN scale that behaves linearly within [1, 9] and
+    asymptotically approaches a crisp '9' for values > 9.
+    """
+    v = float(value)
+    if v <= 1:
+        return (1.0, 1.0, 1.0)
+    if v <= 9:
+        m = v
+        l = v - 1
+        return (max(1.0, l), m, min(9.0, v + 1))
+    else: # v > 9
+        excess = v - 9.0
+        # Lower bound approaches 9 from 8 as excess grows
+        l = 8.0 + (1.0 - (1.0 / (1.0 + excess)))
+        return (l, 9.0, 9.0)
+
+
+
+def _interpolate_from_dict(value: float, scale_dict: Dict[int, tuple]) -> Tuple[float, float]:
+    """A generic helper to interpolate (mu, nu) pairs from a dictionary scale."""
+    value = float(value)
+    max_key = max(scale_dict.keys())
+    value = np.clip(value, 1, max_key)
+
+    if value == int(value) and int(value) in scale_dict:
+        return scale_dict[int(value)]
+
+    lower_key = int(np.floor(value))
+    upper_key = int(np.ceil(value))
+
+    # Handle edge case where value is exactly on an integer
+    if lower_key == upper_key:
+        return scale_dict[lower_key]
+
+    # Handle cases where one key might not exist (e.g., in a 5-level scale for value 2.5)
+    if lower_key not in scale_dict or upper_key not in scale_dict:
+        # Fallback: snap to the nearest valid key
+        closest_key = min(scale_dict.keys(), key=lambda k: abs(k - value))
+        return scale_dict[closest_key]
+
+    lower_params = scale_dict[lower_key]
+    upper_params = scale_dict[upper_key]
+
+    weight = value - lower_key
+
+    mu = lower_params[0] * (1 - weight) + upper_params[0] * weight
+    nu = lower_params[1] * (1 - weight) + upper_params[1] * weight
+
+    return (mu, nu)
+
+def nguyen_9_level_ifn_scale(value: float) -> Tuple[float, float]:
+    """Functional IFN scale based on Nguyen (2019) with interpolation."""
+    scale_dict = {
+        1: (0.50, 0.40), 2: (0.55, 0.35), 3: (0.60, 0.30), 4: (0.65, 0.25),
+        5: (0.70, 0.20), 6: (0.75, 0.15), 7: (0.80, 0.10), 8: (0.90, 0.05), 9: (1.00, 0.00)
+    }
+    return _interpolate_from_dict(value, scale_dict)
+
+def buyukozkan_9_level_ifn_scale(value: float) -> Tuple[float, float]:
+    """Functional IFN scale based on Büyüközkan (2016) with interpolation."""
+    scale_dict = {
+        1: (0.50, 0.40), 2: (0.55, 0.35), 3: (0.60, 0.30), 4: (0.65, 0.25),
+        5: (0.70, 0.20), 6: (0.75, 0.15), 7: (0.80, 0.10), 8: (0.85, 0.05), 9: (0.90, 0.00)
+    }
+    return _interpolate_from_dict(value, scale_dict)
+
+def dymova_9_level_ifn_scale(value: float) -> Tuple[float, float]:
+    """Functional IFN scale based on Dymova & Sevastjanov with interpolation."""
+    scale_dict = {
+        1: (0.10, 0.90), 2: (0.20, 0.75), 3: (0.35, 0.60), 4: (0.45, 0.50),
+        5: (0.50, 0.45), 6: (0.60, 0.35), 7: (0.75, 0.20), 8: (0.85, 0.10), 9: (0.90, 0.10)
+    }
+    return _interpolate_from_dict(value, scale_dict)
+
+def chen_tan_5_level_ifn_scale(value: float) -> Tuple[float, float]:
+    """Functional 5-level IFN scale with interpolation."""
+    scale_dict = {
+        1: (0.1, 0.8), 2: (0.3, 0.6), 3: (0.5, 0.4), 4: (0.7, 0.2), 5: (0.9, 0.0)
+    }
+    return _interpolate_from_dict(value, scale_dict)
+
 
 
 RI_Approximation_Func = Callable[[int, int, Dict[int, float]], float]
@@ -89,9 +209,24 @@ class Configuration:
             'default': 0.37 # Default for n > 4
         }
 
-        # --- Fuzzy Scale Parameters (from matix_builder.py) ---
 
-        # Predefined fuzzy scales
+
+        self.FUZZY_TFN_SCALES_FUNCTIONS: Dict[str, ScaleFunction] = {
+            "linear": linear_tfn_scale,
+            "wide": wide_tfn_scale,
+            "narrow": narrow_tfn_scale,
+            "asymptotic": asymptotic_tfn_scale
+        }
+
+        self.FUZZY_IFN_SCALES_FUNCTIONS: Dict[str, ScaleFunction] = {
+            "nguyen_9_level": nguyen_9_level_ifn_scale,
+            "buyukozkan_9_level": buyukozkan_9_level_ifn_scale,
+            "dymova_9_level": dymova_9_level_ifn_scale,
+            "chen_tan_5_level": chen_tan_5_level_ifn_scale
+        }
+
+        # --- Deprecated / Legacy Dictionary Scales ---
+
         self.FUZZY_TFN_SCALES: Dict[str, Dict[int, tuple]] = {
             "linear": {
                 1: (1, 1, 1), 2: (1, 2, 3), 3: (2, 3, 4), 4: (3, 4, 5),
@@ -146,6 +281,21 @@ class Configuration:
 
         self.RI_APPROXIMATION_FUNC: RI_Approximation_Func = default_ri_approximation
 
+
+    def register_tfn_scale_function(self, name: str, func: ScaleFunction):
+        """Registers a new TFN scale function."""
+        if name in self.FUZZY_TFN_SCALES_FUNCTIONS:
+            print(f"Warning: Overwriting TFN scale function '{name}'")
+        self.FUZZY_TFN_SCALES_FUNCTIONS[name] = func
+
+    def register_ifn_scale_function(self, name: str, func: ScaleFunction):
+        """Registers a new IFN scale function."""
+        if name in self.FUZZY_IFN_SCALES_FUNCTIONS:
+            print(f"Warning: Overwriting IFN scale function '{name}'")
+        self.FUZZY_IFN_SCALES_FUNCTIONS[name] = func
+
+    # --- Deprecated / Legacy Dictionary Scales ---
+    
     def register_tfn_scale(self, name: str, scale_definition: Dict[int, tuple]):
         """Registers a new TFN conversion scale to the configuration."""
         if name in self.FUZZY_TFN_SCALES:

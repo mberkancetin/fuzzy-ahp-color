@@ -4,7 +4,9 @@ import numpy as np
 import math
 from .config import configure_parameters
 from .completion import complete_matrix
-from .types import Number
+from .weight_derivation import derive_weights
+from .types import Number, Crisp
+
 
 if TYPE_CHECKING:
     from .types import NumericType, Number, TFN, IT2TrFN, TrFN, IFN, Crisp
@@ -21,7 +23,7 @@ class FuzzyScale:
     @staticmethod
     def available_tfn_scales() -> List[str]:
         """Returns a list of available TFN scale types from the global config."""
-        return list(configure_parameters.FUZZY_TFN_SCALES.keys())
+        return list(configure_parameters.FUZZY_TFN_SCALES_FUNCTIONS.keys())
 
     @staticmethod
     def available_ifn_scales() -> List[str]:
@@ -30,7 +32,7 @@ class FuzzyScale:
 
     @staticmethod
     def get_fuzzy_number(
-        crisp_value: int,
+        crisp_value: float,
         number_type: Type[Number],
         scale: str = 'linear',
         fuzziness: float = None,
@@ -38,7 +40,8 @@ class FuzzyScale:
         lmf_spread: float = 0.5
     ) -> Number:
         """
-        Converts a crisp judgment (1-9) to a fuzzy number using a named scale.
+        Converts a crisp judgment value to a fuzzy number using a registered scale function.
+        This method now handles any float value for TFN/TrFN scales.
 
         Args:
             crisp_value: The Saaty scale integer (1-9 or -9 to -1 for reciprocals).
@@ -55,44 +58,54 @@ class FuzzyScale:
             if scale not in configure_parameters.FUZZY_IFN_SCALES:
                 raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_tfn_scales()}")
 
-        if not isinstance(crisp_value, (int, float)):
+        if not isinstance(crisp_value, (int, float, np.number)):
             raise TypeError("Crisp judgment must be a number.")
-
-        is_reciprocal = False
-        value = crisp_value
-
-        if 0 < abs(value) < 1:
-            is_reciprocal = True
-            value = 1 / value
-
-        # Round the value to the nearest integer to use it as a key for our scales.
-        # This handles cases like 1/3 (0.333...) whose reciprocal is 3.
-        # It also handles a direct input of 3.1 being treated as 3.
-        value = int(round(value))
-
-        if not (1 <= value <= 9):
-            raise ValueError(f"Judgment value ({crisp_value}) must correspond to a Saaty scale value of 1-9.")
 
         type_name = number_type.__name__
 
-        # Base case: Equal importance
+        if type_name == 'Crisp':
+            return number_type(crisp_value)
+
+        is_reciprocal = False
+        value = float(crisp_value)
+        if 0 < abs(value) < 1:
+            is_reciprocal = True
+            value = 1.0 / value
+
+        type_name = number_type.__name__
         if value == 1:
             return number_type.multiplicative_identity()
 
-        # Define standard spreads for TFN and TrFN based on fuzziness
         spread = fuzziness
         if type_name == 'TFN':
             if spread:
                 params = (max(1, value - spread), value, value + spread)
             else:
-                params = configure_parameters.FUZZY_TFN_SCALES[scale][value]
+                scale_func = configure_parameters.FUZZY_TFN_SCALES_FUNCTIONS.get(scale)
+                if scale_func is None:
+                    raise ValueError(f"Unknown TFN scale function: '{scale}'. Available: {FuzzyScale.available_tfn_scales()}")
+                params = scale_func(value)
         elif type_name == 'TrFN':
-            params = (max(1, value - spread), value - spread/2, value + spread/2, value + spread)
+            if spread:
+                params = (max(1, value - spread), value - spread/2, value + spread/2, value + spread)
+            else:
+                scale_func = configure_parameters.FUZZY_TFN_SCALES_FUNCTIONS.get(scale)
+                if scale_func is None:
+                    raise ValueError(f"Unknown TrFN scale function: '{scale}'. Available: {FuzzyScale.available_tfn_scales()}")
+
+                params = scale_func(value)
+                if type_name == 'TrFN' and len(params) == 3:
+                    params = (params[0], params[1], params[1], params[2])
         elif type_name == 'GFN':
-            params = (value, value * (fuzziness / 10.0))
+            key = int(np.clip(round(value), 1, 9))
+            params = (key, key * (fuzziness / 10.0))
         elif type_name == 'IFN':
-            scale = "nguyen_9_level"
-            params = configure_parameters.FUZZY_IFN_SCALES[scale][value]
+            scale_func = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS.get(scale)
+            if scale_func is None:
+                if scale not in configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS:
+                     print(f"Warning: IFN scale '{scale}' not found. Defaulting to 'nguyen_9_level'.")
+                     scale_func = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS['nguyen_9_level']
+            params = scale_func(value)
         elif type_name == 'IT2TrFN':
             l, m, u = configure_parameters.FUZZY_TFN_SCALES[scale][abs(crisp_value)]
 
@@ -256,6 +269,7 @@ def create_completed_matrix(
     number_type: Type[Number],
     scale: str = 'linear',
     completion_method: str = "eigenvalue_optimization",
+    fuzziness: float = None,
     **kwargs
 ) -> np.ndarray:
     """
@@ -314,6 +328,7 @@ def create_completed_matrix(
             final_fuzzy_matrix[i, j] = FuzzyScale.get_fuzzy_number(
                 crisp_value,
                 number_type,
+                fuzziness=fuzziness,
                 scale=scale
             )
 
@@ -360,6 +375,43 @@ def rebuild_consistent_matrix(inconsistent_matrix: np.ndarray) -> np.ndarray:
 
     except Exception as e:
         print(f"Warning: Could not calculate geometric mean weights during rebuild. Defaulting to equal weights. Error: {e}")
+        weights = np.full(n, 1.0 / n)
+
+    consistent_matrix = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        for j in range(n):
+            if weights[j] > 1e-9:
+                consistent_matrix[i, j] = weights[i] / weights[j]
+            else:
+                consistent_matrix[i, j] = 1.0
+
+    return consistent_matrix
+
+def rebuild_from_eigenvector(inconsistent_matrix: np.ndarray) -> np.ndarray:
+    """
+    Creates a new, perfectly consistent matrix from an inconsistent one using
+    the principal right eigenvector method.
+
+    Args:
+        inconsistent_matrix: A complete, square NumPy array of numerical judgments.
+
+    Returns:
+        A new, perfectly consistent NumPy array of the same size.
+    """
+    n = inconsistent_matrix.shape[0]
+
+    try:
+        matrix = inconsistent_matrix.astype(float)
+    except (ValueError, TypeError):
+        raise TypeError("Input matrix for rebuild_from_eigenvector must be numerical.")
+
+    crisp_object_matrix = np.array([[Crisp(c) for c in row] for row in matrix], dtype=object)
+
+    try:
+        results = derive_weights(crisp_object_matrix, Crisp, method="eigenvector")
+        weights = results['crisp_weights']
+    except Exception as e:
+        print(f"Warning: Could not calculate eigenvector. Defaulting to equal weights. Error: {e}")
         weights = np.full(n, 1.0 / n)
 
     consistent_matrix = np.zeros((n, n), dtype=float)

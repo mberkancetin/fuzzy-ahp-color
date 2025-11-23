@@ -86,11 +86,11 @@ def sample_tfn_model() -> Hierarchy:
 
     # Set criteria/sub-criteria comparison matrices
     crit_judgments = {("Cost", "Quality"): 2}
-    crit_matrix = create_matrix_from_judgments(crit_judgments, criteria, TFN)
+    crit_matrix = create_matrix_from_judgments(crit_judgments, criteria, TFN, fuzziness=1)
     model.set_comparison_matrix("Goal", crit_matrix)
 
     sub_crit_judgments = {("Purchase Price", "Maintenance"): 3}
-    sub_crit_matrix = create_matrix_from_judgments(sub_crit_judgments, sub_criteria_cost, TFN)
+    sub_crit_matrix = create_matrix_from_judgments(sub_crit_judgments, sub_criteria_cost, TFN, fuzziness=1)
     model.set_comparison_matrix("Cost", sub_crit_matrix)
 
     # Judgments for alternatives under each leaf criterion
@@ -99,13 +99,13 @@ def sample_tfn_model() -> Hierarchy:
     alt_vs_quality = {("Option A", "Option B"): 5}   # Option A is much better on quality
 
     # Create and set each matrix
-    matrix_price = create_matrix_from_judgments(alt_vs_purchase_price, alternatives, TFN)
+    matrix_price = create_matrix_from_judgments(alt_vs_purchase_price, alternatives, TFN, fuzziness=1)
     model.set_alternative_matrix("Purchase Price", matrix_price)
 
-    matrix_maint = create_matrix_from_judgments(alt_vs_maintenance, alternatives, TFN)
+    matrix_maint = create_matrix_from_judgments(alt_vs_maintenance, alternatives, TFN, fuzziness=1)
     model.set_alternative_matrix("Maintenance", matrix_maint)
 
-    matrix_qual = create_matrix_from_judgments(alt_vs_quality, alternatives, TFN)
+    matrix_qual = create_matrix_from_judgments(alt_vs_quality, alternatives, TFN, fuzziness=1)
     model.set_alternative_matrix("Quality", matrix_qual)
 
     return model
@@ -138,10 +138,10 @@ def test_full_end_to_end_tfn_workflow(full_problem_setup):
     # 1. CREATE AND AGGREGATE MATRICES
     # ------------------------------------
     # Create individual matrices for each expert
-    crit_matrix1 = create_matrix_from_judgments(data['expert1']['crit'], data['criteria'], TFN)
-    crit_matrix2 = create_matrix_from_judgments(data['expert2']['crit'], data['criteria'], TFN)
-    perf_matrix1 = create_matrix_from_judgments(data['expert1']['perf'], data['sub_criteria_perf'], TFN)
-    perf_matrix2 = create_matrix_from_judgments(data['expert2']['perf'], data['sub_criteria_perf'], TFN)
+    crit_matrix1 = create_matrix_from_judgments(data['expert1']['crit'], data['criteria'], TFN, fuzziness=1)
+    crit_matrix2 = create_matrix_from_judgments(data['expert2']['crit'], data['criteria'], TFN, fuzziness=1)
+    perf_matrix1 = create_matrix_from_judgments(data['expert1']['perf'], data['sub_criteria_perf'], TFN, fuzziness=1)
+    perf_matrix2 = create_matrix_from_judgments(data['expert2']['perf'], data['sub_criteria_perf'], TFN, fuzziness=1)
 
     # Aggregate the experts' judgments
     group_crit_matrix = aggregate_matrices([crit_matrix1, crit_matrix2], method="geometric")
@@ -174,7 +174,7 @@ def test_full_end_to_end_tfn_workflow(full_problem_setup):
     # Create and set alternative comparison matrices for each LEAF node
     # The leaf nodes are 'Price', 'CPU', and 'GPU'
     for leaf_id, judgments in data['alt_judgments'].items():
-        alt_matrix = create_matrix_from_judgments(judgments, data['alternatives'], TFN)
+        alt_matrix = create_matrix_from_judgments(judgments, data['alternatives'], TFN, fuzziness=1)
         model.set_alternative_matrix(leaf_id, alt_matrix)
 
     # 4. VALIDATE AND CHECK CONSISTENCY

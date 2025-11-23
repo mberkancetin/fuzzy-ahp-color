@@ -238,6 +238,42 @@ def piecewise_score_method_ifn(ifn: IFN, lambda_param: float = 2.0) -> float:
 
     return score_part + log_part if mu >= nu else score_part - log_part
 
+def modal_transform_ifn(ifn: IFN, alpha: float = 0.5, beta: float = 0.0, **kwargs) -> float:
+    """
+    Defuzzifies an IFN after applying an Extended Modal Operator (F_α,β).
+
+    This method, based on Marinov (2022) after Atanassov, allows for expressing
+    optimism or pessimism by distributing the hesitation degree (π) into the
+    membership (μ) and non-membership (ν) degrees before final scoring.
+
+    Args:
+        ifn (IFN): The Intuitionistic Fuzzy Number to defuzzify.
+        alpha (float, optional): The proportion of hesitation to convert into
+                                 membership (optimism). Must be in [0, 1].
+                                 Defaults to 0.5.
+        beta (float, optional): The proportion of hesitation to convert into
+                                non-membership (pessimism). Must be in [0, 1].
+                                Defaults to 0.0.
+
+    Returns:
+        float: The final crisp score, typically on a [0, 1] scale.
+    """
+    if not (0 <= alpha <= 1 and 0 <= beta <= 1):
+        raise ValueError("alpha and beta must be between 0 and 1.")
+    if alpha + beta > 1:
+        raise ValueError("The sum of alpha and beta must not exceed 1.")
+
+    pi = ifn.pi
+
+    # Apply the F_α,β transformation
+    new_mu = ifn.mu + alpha * pi
+    new_nu = ifn.nu + beta * pi
+
+    # After the transformation, the hesitation of the new IFN is reduced.
+    # S = (μ' + 1 - ν') / 2
+    final_score = (new_mu + 1.0 - new_nu) / 2.0
+
+    return final_score
 
 # ==============================================================================
 # 2. REGISTRATION
@@ -266,9 +302,10 @@ GFN.register_defuzzify_method('pessimistic_99_percent', pessimistic_method_gfn)
 # crisp value for ranking. Different methods exist based on how the
 # hesitation degree (π = 1 - μ - ν) is handled.
 IFN.register_defuzzify_method('score', score_method_ifn)
-IFN.register_defuzzify_method('normalized_score', chen_tan_scoring_ifn) 
+IFN.register_defuzzify_method('normalized_score', chen_tan_scoring_ifn)
 IFN.register_defuzzify_method('centroid', chen_tan_scoring_ifn) # 'centroid' is an alias for 'normalized_score'
 IFN.register_defuzzify_method('accuracy', accuracy_method_ifn)
 IFN.register_defuzzify_method('value', value_method_ifn)
 IFN.register_defuzzify_method('entropy', entropy_method_ifn)
 IFN.register_defuzzify_method('piecewise_score', piecewise_score_method_ifn)
+IFN.register_defuzzify_method('modal_transform', modal_transform_ifn)

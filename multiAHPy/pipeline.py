@@ -167,7 +167,7 @@ class Workflow:
 
         return model_instance
 
-    def fit_weights(self, expert_matrices: Dict[str, List[np.ndarray]], expert_weights: List[float] | None = None):
+    def fit_weights(self, expert_matrices: Dict[str, List[np.ndarray]], expert_weights: List[float] | None = None, consistency_check: List[str] = ["saaty_cr", "gci"]):
         """
         Calculates the final criteria weights and checks consistency based on the chosen group strategy.
 
@@ -192,7 +192,7 @@ class Workflow:
             self.model.calculate_weights(method=self.recipe['weight_derivation_method'])
 
             print("  - Checking consistency of the aggregated model...")
-            self.consistency_report['aggregated_model'] = self.model.check_consistency()
+            self.consistency_report['aggregated_model'] = self.model.check_consistency(required_indices=consistency_check)
 
         elif self.group_strategy == "aggregate_priorities":
             # STRATEGY 2: Aggregate Priorities (AIP)
@@ -208,7 +208,7 @@ class Workflow:
                     if not expert_model._find_node(node_id).is_leaf:
                         expert_model.set_comparison_matrix(node_id, matrices[i])
 
-                self.consistency_report[expert_name] = expert_model.check_consistency()
+                self.consistency_report[expert_name] = expert_model.check_consistency(required_indices=consistency_check)
 
             criteria_matrices_per_node = {
                 node_id: matrices for node_id, matrices in expert_matrices.items()
@@ -222,7 +222,7 @@ class Workflow:
 
         return self
 
-    def _fit_weights_aij(self, expert_matrices, expert_weights):
+    def _fit_weights_aij(self, expert_matrices, expert_weights, consistency_check=["saaty_cr", "gci"]):
         """Fits weights using Aggregation of Individual Judgments."""
         aggregated_matrices = self._aggregate_expert_matrices(expert_matrices, expert_weights)
 
@@ -230,7 +230,7 @@ class Workflow:
             self.model.set_comparison_matrix(node_id, matrix)
 
         self.model.calculate_weights(method=self.recipe['weight_derivation_method'])
-        self.consistency_report = self.model.check_consistency()
+        self.consistency_report = self.model.check_consistency(required_indices=consistency_check)
 
     def _fit_weights_aip(self, expert_matrices: Dict[str, List[np.ndarray]], expert_weights: List[float] | None = None):
         """
