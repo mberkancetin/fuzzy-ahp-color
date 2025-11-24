@@ -449,7 +449,8 @@ class Consistency:
     def get_consistency_recommendations(
         model: Hierarchy,
         inconsistent_node_id: str,
-        consistency_method: str = 'centroid'
+        consistency_method: str = 'centroid',
+        recommendation_method: str = "logarithmic_error_magnitude"
     ) -> Dict[str, Any]:
         """
         Provides a ranked list of judgments to change to improve consistency.
@@ -494,10 +495,24 @@ class Consistency:
                 expected_val = weights[i] / weights[j]
                 actual_val = crisp_matrix[i, j]
 
-                if abs(expected_val) > 1e-9:
-                    error = abs(actual_val - expected_val) / expected_val
+                if recommendation_method == "relative_error":
+                    if abs(expected_val) > 1e-9:
+                        error = abs(actual_val - expected_val) / expected_val
+                    else:
+                        error = abs(actual_val - expected_val)
                 else:
-                    error = abs(actual_val - expected_val)
+                    # Calculate the ratio of the actual value to the expected value
+                    # This is the core of the geometric consistency error (GCI is based on log of this ratio)
+                    # A value of 1 means perfect consistency for this pair.
+                    ratio_error = actual_val / expected_val
+
+                    # The magnitude of the log of the ratio is a more robust measure of inconsistency
+                    # for ratio-scale data like AHP.
+                    error_magnitude = abs(np.log(ratio_error))
+
+                    # We use the error_magnitude to rank the pairs.
+                    error = error_magnitude
+
 
                 all_errors.append({
                     "pair": (i, j),

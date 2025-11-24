@@ -553,7 +553,7 @@ class Workflow:
 
             return change_log
 
-    def make_consistent2(
+    def make_consistent_retired(
         self,
         target_cr: float | None = None,
         max_cycles: int = 50,

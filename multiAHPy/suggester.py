@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Any, Literal, get_args
 
-FuzzyNumberPreference = Literal["simple", "interval_certainty", "hesitation"]
+FuzzyNumberPreference = Literal["classic", "crisp", "simple", "tfn", "interval_certainty", "trfn", "hesitation", "ifn"]
 AggregationGoal = Literal["average", "robust_to_outliers", "envelope", "consensus"]
 WeightDerivationGoal = Literal["stable_and_simple", "true_fuzzy", "consistency_focused_crisp"]
 
@@ -50,6 +50,8 @@ class MethodSuggester:
 
         Args:
             fuzzy_number_preference: Describes the nature of expert uncertainty.
+                - 'classic': Classical AHP method for non-fuzzy applications.
+                            (Maps to Crisp).
                 - 'simple': Experts are reasonably confident, can provide a single peak value.
                             (Maps to TFN).
                 - 'interval_certainty': Experts are certain about a range, not a single point.
@@ -75,7 +77,7 @@ class MethodSuggester:
             A dictionary containing the suggested `number_type`, `number_type_name`,
             `aggregation_method`, `weight_derivation_method`, and `consistency_method`.
         """
-        from .types import TFN, TrFN, IFN
+        from .types import TFN, TrFN, IFN, Crisp
 
         if fuzzy_number_preference not in get_args(FuzzyNumberPreference):
             raise ValueError(f"Invalid fuzzy_number_preference. Choose from: {get_args(FuzzyNumberPreference)}")
@@ -87,11 +89,13 @@ class MethodSuggester:
         recipe = {}
 
         # --- Suggest Number Type ---
-        if fuzzy_number_preference == "simple":
+        if fuzzy_number_preference == "classic" or fuzzy_number_preference.lower() == "crisp":
+            recipe['number_type'] = Crisp
+        elif fuzzy_number_preference == "simple" or fuzzy_number_preference.lower() == "tfn":
             recipe['number_type'] = TFN
-        elif fuzzy_number_preference == "interval_certainty":
+        elif fuzzy_number_preference == "interval_certainty" or fuzzy_number_preference.lower() == "trfn":
             recipe['number_type'] = TrFN
-        elif fuzzy_number_preference == "hesitation":
+        elif fuzzy_number_preference == "hesitation" or fuzzy_number_preference.lower() == "ifn":
             recipe['number_type'] = IFN
         else:
             recipe['number_type'] = TFN # Safe default

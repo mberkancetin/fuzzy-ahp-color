@@ -100,12 +100,9 @@ def _perform_iterative_revision(
                     worst_matrix_info = {"node_id": node_id, "cr": cr_val}
 
             if worst_matrix_info is None:
-                if stagnated_matrices_for_expert:
-                    print(f"    - ❌ Some matrices for {expert_id} are not consistent.")
-                    break
-                else:
-                    print(f"    - ✅ All matrices for {expert_id} are now consistent.")
-                    break
+                print(f"    - All possible matrices for {expert_id} are sanitized.")
+
+                break
 
             node_id_to_fix = worst_matrix_info['node_id']
             print(f"    - Cycle {revision_cycle + 1}/{max_cycles}: Fixing '{node_id_to_fix}' (CR: {worst_matrix_info['cr']:.4f})")
@@ -139,6 +136,116 @@ def _perform_iterative_revision(
 
             if node_id_to_fix not in expert_change_log: expert_change_log[node_id_to_fix] = []
             expert_change_log[node_id_to_fix].append({'from': top_rec['current_value'], 'to': new_value, 'cycle': revision_cycle + 1})
+
+        else:
+            print(f"    - ⚠️ Warning: Reached max_cycles for {expert_id}. Some matrices may still be inconsistent.")
+
+        change_log[expert_id] = expert_change_log
+
+    return revised_crisp_matrices, change_log
+
+def _perform_dynamic_revision(
+    crisp_matrices_per_expert: List[Dict[str, np.ndarray]],
+    root_node: Node,
+    target_cr: float,
+    max_cycles: int,
+    bound: float
+) -> tuple[List[Dict[str, np.ndarray]], Dict[str, Any]]:
+    """
+    The self-contained engine for iterative adjustment strategies with dynamic step size.
+    """
+    change_log = {}
+
+    revised_crisp_matrices = copy.deepcopy(crisp_matrices_per_expert)
+
+    for i, expert_matrices_dict in enumerate(revised_crisp_matrices):
+        expert_id = f"expert_{i+1}"
+        print(f"\n  - Sanitizing matrices for {expert_id} (Dynamic Step Strategy)...")
+        expert_change_log = {}
+        stagnated_matrices_for_expert = set()
+
+        for revision_cycle in range(max_cycles):
+            temp_model = Hierarchy(root_node, Crisp)
+            for node_id, matrix in expert_matrices_dict.items():
+                temp_model.set_comparison_matrix(node_id, matrix)
+
+            consistency_report = Consistency.check_model_consistency(temp_model, saaty_cr_threshold=target_cr)
+
+            worst_matrix_info = None
+            max_cr = target_cr
+            for node_id, metrics in consistency_report.items():
+                if node_id in stagnated_matrices_for_expert:
+                    continue
+
+                cr_val = metrics.get('saaty_cr')
+                if isinstance(cr_val, (float, np.floating)) and cr_val > max_cr:
+                    max_cr = cr_val
+                    worst_matrix_info = {"node_id": node_id, "cr": cr_val}
+
+            if worst_matrix_info is None:
+                if stagnated_matrices_for_expert:
+                    print(f"    - ❌ Some matrices for {expert_id} are not consistent.")
+                    break
+                else:
+                    print(f"    - ✅ All matrices for {expert_id} are now consistent.")
+                    break
+
+            node_id_to_fix = worst_matrix_info['node_id']
+            current_cr = worst_matrix_info['cr']
+            print(f"    - Cycle {revision_cycle + 1}/{max_cycles}: Fixing '{node_id_to_fix}' (CR: {current_cr:.4f})")
+
+            recommendations = Consistency.get_consistency_recommendations(temp_model, node_id_to_fix)
+
+            if "error" in recommendations or not recommendations.get("revisions"):
+                print(f"    - ❌ Warning: Could not get recommendation for {node_id_to_fix}. Flagging as stagnated.")
+                stagnated_matrices_for_expert.add(node_id_to_fix)
+                continue
+
+            top_rec = recommendations['revisions'][0]
+            old_value = top_rec['current_value']
+            ideal_value = top_rec['suggested_value']
+
+            # --- DYNAMIC STEP SIZE CALCULATION ---
+            # Step size is proportional to how far the CR is from the target (0.1)
+            # We use a factor (e.g., 0.5) to control the aggressiveness of the step.
+            # The step is a fraction of the distance between the current value and the ideal value.
+            cr_diff = current_cr - target_cr
+            # Normalize cr_diff by the initial CR (or a max CR) to get a factor between 0 and 1
+            # For simplicity, we'll use a linear decay factor based on the current CR
+            # Let's use a simple factor: 1.0 - (target_cr / current_cr)
+            # This factor is 0 when CR=target_cr and approaches 1 when CR is very large.
+            # We'll cap the factor to prevent overshooting.
+
+            # Simple linear step factor: 0.5 * (CR_current - CR_target) / CR_current
+            # This ensures the step size shrinks as CR approaches CR_target
+            step_factor = np.clip(0.5 * (current_cr - target_cr) / current_cr, 0.05, 0.95)
+
+            # Calculate the new value as a weighted average of the old and ideal values
+            # new_value = old_value * (1 - step_factor) + ideal_value * step_factor
+
+            # A simpler approach is to adjust the log-ratio of the values
+            log_old = np.log(old_value)
+            log_ideal = np.log(ideal_value)
+            log_new = log_old + (log_ideal - log_old) * step_factor
+            new_value = np.exp(log_new)
+
+            # Apply bounding
+            new_value = np.clip(new_value, 1/bound, bound)
+
+            # --- ROBUST STAGNATION CHECK ---
+            if np.isclose(old_value, new_value, atol=1e-4):
+                print(f"    - ⚠️ Warning: Suggested change for '{node_id_to_fix}' is negligible ({old_value:.4f} -> {new_value:.4f}). Flagging as stagnated.")
+                stagnated_matrices_for_expert.add(node_id_to_fix)
+                continue
+
+            # Apply the change
+            r, c = top_rec['pair']
+            matrix_to_revise = expert_matrices_dict[node_id_to_fix]
+            matrix_to_revise[r, c] = Crisp(new_value)
+            matrix_to_revise[c, r] = Crisp(1 / new_value)
+
+            if node_id_to_fix not in expert_change_log: expert_change_log[node_id_to_fix] = []
+            expert_change_log[node_id_to_fix].append({'from': top_rec['current_value'], 'to': new_value, 'cycle': revision_cycle + 1, 'step_factor': step_factor})
 
         else:
             print(f"    - ⚠️ Warning: Reached max_cycles for {expert_id}. Some matrices may still be inconsistent.")
@@ -507,6 +614,142 @@ def rebuild_consistent_strategy(
                 sanitized_matrices[node_id][i] = re_fuzzified_matrix
 
     return sanitized_matrices, change_log
+
+
+@register_sanitization_strategy("rebuild_dynamic_step")
+def rebuild_dynamic_step_strategy(
+    raw_matrices: Dict, root_node: Node, target_number_type: type,
+    target_cr: float = 0.1, max_cycles: int = 50, bound: float = 9.0,
+    scale: str = 'linear', **kwargs
+) -> tuple[Dict, Dict]:
+    """
+    Sanitizes matrices using an iterative adjustment method with a dynamic step size.
+    The step size is proportional to the current CR, allowing for larger steps
+    when far from the target and smaller steps when close (to avoid overshoot).
+    """
+    change_log = {}
+
+    # 1. Defuzzify all matrices to a list of crisp matrix dictionaries
+    expert_crisp_matrices = []
+    num_experts = len(list(raw_matrices.values())[0])
+    for i in range(num_experts):
+        expert_dict = {
+            node_id: np.array([[Crisp(cell.defuzzify()) for cell in row] for row in matrices[i]], dtype=object)
+            for node_id, matrices in raw_matrices.items()
+        }
+        expert_crisp_matrices.append(expert_dict)
+
+    # 2. Run the dynamic revision engine
+    consistent_crisp_matrices, change_log = _perform_dynamic_revision(
+        expert_crisp_matrices, root_node, target_cr, max_cycles, bound
+    )
+
+    # 3. Re-fuzzify the results
+    sanitized_fuzzy_matrices = {node_id: [] for node_id in raw_matrices}
+    for i in range(num_experts):
+        for node_id in raw_matrices.keys():
+            crisp_matrix = consistent_crisp_matrices[i][node_id]
+            n = crisp_matrix.shape[0]
+            re_fuzzified_matrix = np.empty((n, n), dtype=object)
+            for r in range(n):
+                for c in range(n):
+                    crisp_value = crisp_matrix[r, c].value
+                    re_fuzzified_matrix[r, c] = FuzzyScale.get_fuzzy_number(
+                        crisp_value=crisp_value,
+                        number_type=target_number_type,
+                        scale=scale
+                    )
+            sanitized_fuzzy_matrices[node_id].append(re_fuzzified_matrix)
+
+    return sanitized_fuzzy_matrices, change_log
+
+
+@register_sanitization_strategy("rebuild_last_ditch")
+def rebuild_last_ditch_strategy(
+    raw_matrices: Dict,
+    root_node: Node,
+    target_number_type: type,
+    target_cr: float = 0.1,
+    max_cycles: int = 20,
+    bound: float = 9.0,
+    scale: str = 'linear',
+    completion_method: str = 'llsm',
+    **kwargs
+) -> tuple[Dict, Dict]:
+    """
+    Sanitizes matrices using the standard iterative adjustment. If a matrix
+    fails to converge after max_cycles, it is rebuilt using a one-shot
+    method (e.g., LLSM) as a 'last ditch' effort.
+    """
+    # 1. Defuzzify all matrices to a list of crisp matrix dictionaries
+    expert_crisp_matrices = []
+    num_experts = len(list(raw_matrices.values())[0])
+    for i in range(num_experts):
+        expert_dict = {
+            node_id: np.array([[Crisp(cell.defuzzify()) for cell in row] for row in matrices[i]], dtype=object)
+            for node_id, matrices in raw_matrices.items()
+        }
+        expert_crisp_matrices.append(expert_dict)
+
+    # 2. Run the standard iterative revision engine
+    consistent_crisp_matrices, change_log = _perform_iterative_revision(
+        expert_crisp_matrices, root_node, target_cr, max_cycles, use_bounded_adjustment=True, bound=bound
+    )
+
+    # 3. Perform 'last ditch' rebuild for non-converged matrices
+    print("\n--- Performing Last Ditch Rebuild for Non-Converged Matrices ---")
+    for i, expert_matrices_dict in enumerate(consistent_crisp_matrices):
+        expert_id = f"expert_{i+1}"
+        temp_model = Hierarchy(root_node, Crisp)
+        for node_id, matrix in expert_matrices_dict.items():
+            temp_model.set_comparison_matrix(node_id, matrix)
+
+        consistency_report = Consistency.check_model_consistency(temp_model, saaty_cr_threshold=target_cr)
+
+        for node_id, metrics in consistency_report.items():
+            cr_val = metrics.get('saaty_cr')
+            if isinstance(cr_val, (float, np.floating)) and cr_val > target_cr:
+                print(f"  - ⚠️ Rebuilding {expert_id}/{node_id} (CR: {cr_val:.4f}) using '{completion_method}'...")
+                matrix_to_rebuild = expert_matrices_dict[node_id]
+                crisp_matrix_float = np.array([[c.value for c in row] for row in matrix_to_rebuild], dtype=float)
+                crisp_matrix = np.array([[c.defuzzify() for c in row] for row in matrix_to_rebuild], dtype=float)
+
+
+                n = crisp_matrix_float.shape[0]
+                rebuilt_crisp_obj_matrix = np.empty((n, n), dtype=object)
+                for r in range(n):
+                    for c in range(n):
+                        rebuilt_crisp_obj_matrix[r, c] = Crisp(crisp_matrix_float[r,c])
+                expert_matrices_dict[node_id] = rebuilt_crisp_obj_matrix
+
+                if expert_id not in change_log: change_log[expert_id] = {}
+                if node_id not in change_log[expert_id]: change_log[expert_id][node_id] = []
+                change_log[expert_id][node_id].append({'from': 'Inconsistent', 'to': 'Rebuilt', 'cycle': 'Last Ditch'})
+
+    sanitized_fuzzy_matrices = {node_id: [] for node_id in raw_matrices}
+    for i in range(num_experts):
+        for node_id in raw_matrices.keys():
+            crisp_matrix = consistent_crisp_matrices[i][node_id]
+            n = crisp_matrix.shape[0]
+            re_fuzzified_matrix = np.empty((n, n), dtype=object)
+            for r in range(n):
+                for c in range(n):
+                    cell = crisp_matrix[r, c]
+                    if isinstance(cell, Crisp):
+                        crisp_value = cell.value
+                    elif isinstance(cell, (int, float, np.number)):
+                        crisp_value = float(cell)
+                    else:
+                        raise TypeError(f"Unexpected type in crisp matrix list: {type(cell)}")
+
+                    re_fuzzified_matrix[r, c] = FuzzyScale.get_fuzzy_number(
+                        crisp_value=crisp_value,
+                        number_type=target_number_type,
+                        scale=scale
+                    )
+            sanitized_fuzzy_matrices[node_id].append(re_fuzzified_matrix)
+
+    return sanitized_fuzzy_matrices, change_log
 
 
 @register_sanitization_strategy("rebuild_eigenvector")

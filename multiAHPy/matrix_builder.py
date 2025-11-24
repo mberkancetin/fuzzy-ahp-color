@@ -359,6 +359,7 @@ def rebuild_consistent_matrix(inconsistent_matrix: np.ndarray) -> np.ndarray:
     try:
         matrix = inconsistent_matrix.astype(float)
     except (ValueError, TypeError):
+        print(inconsistent_matrix)
         raise TypeError("Input matrix for rebuild_consistent_matrix must be numerical or convertible to float.")
 
     sanitized_matrix = np.maximum(matrix, 1e-9)

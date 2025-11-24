@@ -295,7 +295,7 @@ class Configuration:
         self.FUZZY_IFN_SCALES_FUNCTIONS[name] = func
 
     # --- Deprecated / Legacy Dictionary Scales ---
-    
+
     def register_tfn_scale(self, name: str, scale_definition: Dict[int, tuple]):
         """Registers a new TFN conversion scale to the configuration."""
         if name in self.FUZZY_TFN_SCALES:
@@ -309,3 +309,31 @@ class Configuration:
         self.FUZZY_IFN_SCALES[name] = scale_definition
 
 configure_parameters = Configuration()
+
+
+
+class ConfigurationContextManager:
+    """
+    A context manager to temporarily change configuration parameters.
+
+    Usage:
+    >>> with ConfigurationContextManager(DEFAULT_SAATY_CR_THRESHOLD=0.05):
+    >>>     # Code block runs with CR threshold set to 0.05
+    >>>     ...
+    >>> # CR threshold reverts to its original value outside the block
+    """
+    def __init__(self, **kwargs):
+        self.changes = kwargs
+        self.original_values = {}
+
+    def __enter__(self):
+        for key, value in self.changes.items():
+            if not hasattr(configure_parameters, key):
+                raise AttributeError(f"Configuration object has no attribute '{key}'")
+            self.original_values[key] = getattr(configure_parameters, key)
+            setattr(configure_parameters, key, value)
+        return configure_parameters
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for key, value in self.original_values.items():
+            setattr(configure_parameters, key, value)

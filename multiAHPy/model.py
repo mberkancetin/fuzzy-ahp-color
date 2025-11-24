@@ -259,6 +259,87 @@ class Hierarchy(Generic[Number]):
 
         return model
 
+    def to_dataframe(self, defuzzify_method: str = 'centroid') -> 'pd.DataFrame':
+        """
+        Exports the hierarchy structure and weights to a pandas DataFrame.
+
+        Args:
+            defuzzify_method: The method to use for converting fuzzy weights to crisp values.
+
+        Returns:
+            A pandas DataFrame containing the node ID, description, local weight,
+            global weight, and consistency metrics (if available).
+        """
+        _check_pandas_availability()
+
+        data = []
+
+        def _traverse(node: Node):
+            local_w = node.local_weight.defuzzify(method=defuzzify_method) if node.local_weight else None
+            global_w = node.global_weight.defuzzify(method=defuzzify_method) if node.global_weight else None
+
+            consistency_report = getattr(self, 'consistency_report', {}).get(node.id, {})
+
+            data.append({
+                'node_id': node.id,
+                'description': node.description,
+                'parent_id': node.parent.id if node.parent else None,
+                'is_leaf': node.is_leaf,
+                'local_weight': local_w,
+                'global_weight': global_w,
+                'saaty_cr': consistency_report.get('saaty_cr'),
+                'gci': consistency_report.get('gci'),
+                'is_consistent': consistency_report.get('is_consistent')
+            })
+
+            for child in node.children:
+                _traverse(child)
+
+        _traverse(self.root)
+        return pd.DataFrame(data)
+
+    @classmethod
+    def from_dataframe(cls, df: 'pd.DataFrame', number_type: Type[Number], root_id: str) -> 'Hierarchy':
+        """
+        Constructs a Hierarchy model from a pandas DataFrame containing node structure.
+
+        The DataFrame must contain 'node_id' and 'parent_id' columns.
+
+        Args:
+            df: The DataFrame containing the hierarchy structure.
+            number_type: The NumericType class to use for the model (e.g., TFN, Crisp).
+            root_id: The ID of the root node in the DataFrame.
+
+        Returns:
+            A new Hierarchy instance.
+        """
+        _check_pandas_availability()
+
+        if 'node_id' not in df.columns or 'parent_id' not in df.columns:
+            raise ValueError("DataFrame must contain 'node_id' and 'parent_id' columns.")
+
+        nodes: Dict[str, Node] = {}
+        for _, row in df.iterrows():
+            node_id = row['node_id']
+            description = row.get('description')
+            nodes[node_id] = Node(node_id, description)
+
+        root_node = None
+        for _, row in df.iterrows():
+            node_id = row['node_id']
+            parent_id = row['parent_id']
+
+            if node_id == root_id:
+                root_node = nodes[node_id]
+
+            if parent_id and parent_id in nodes:
+                nodes[parent_id].add_child(nodes[node_id])
+
+        if root_node is None:
+            raise ValueError(f"Root node with ID '{root_id}' not found in DataFrame.")
+
+        return cls(root_node, number_type)
+
     def add_alternative(self, name: str, description: Optional[str] = None):
         """
         Adds a new alternative to the model.
