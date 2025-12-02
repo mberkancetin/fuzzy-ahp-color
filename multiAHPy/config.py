@@ -88,6 +88,22 @@ def _interpolate_from_dict(value: float, scale_dict: Dict[int, tuple]) -> Tuple[
 
     return (mu, nu)
 
+# ACADEMIC CITATION:
+# Adapted from Büyüközkan, G., & Göçer, F. (2018).
+# "An intuitionistic fuzzy MCDM approach for effective hazardous waste management."
+# Scale for Intuitionistic Fuzzy Numbers.
+ACADEMIC_IFN_SCALE = {
+    1: (0.50, 0.40),
+    2: (0.55, 0.35),
+    3: (0.60, 0.30),
+    4: (0.65, 0.25),
+    5: (0.70, 0.20),
+    6: (0.75, 0.15),
+    7: (0.80, 0.10),
+    8: (0.85, 0.05),
+    9: (0.90, 0.05)  # Note: usually sum is < 1 to allow hesitation
+}
+
 def nguyen_9_level_ifn_scale(value: float) -> Tuple[float, float]:
     """Functional IFN scale based on Nguyen (2019) with interpolation."""
     scale_dict = {
@@ -98,10 +114,7 @@ def nguyen_9_level_ifn_scale(value: float) -> Tuple[float, float]:
 
 def buyukozkan_9_level_ifn_scale(value: float) -> Tuple[float, float]:
     """Functional IFN scale based on Büyüközkan (2016) with interpolation."""
-    scale_dict = {
-        1: (0.50, 0.40), 2: (0.55, 0.35), 3: (0.60, 0.30), 4: (0.65, 0.25),
-        5: (0.70, 0.20), 6: (0.75, 0.15), 7: (0.80, 0.10), 8: (0.85, 0.05), 9: (0.90, 0.00)
-    }
+    scale_dict = ACADEMIC_IFN_SCALE
     return _interpolate_from_dict(value, scale_dict)
 
 def dymova_9_level_ifn_scale(value: float) -> Tuple[float, float]:
@@ -263,22 +276,6 @@ class Configuration:
                 1: (1, 1, 1), 2: (1.5, 2, 2.5), 3: (2.5, 3, 3.5), 4: (3.5, 4, 4.5),
                 5: (4.5, 5, 5.5), 6: (5.5, 6, 6.5), 7: (6.5, 7, 7.5), 8: (7.5, 8, 8.5), 9: (8.5, 9, 9)
             }
-        }
-
-        # ACADEMIC CITATION:
-        # Adapted from Büyüközkan, G., & Göçer, F. (2018).
-        # "An intuitionistic fuzzy MCDM approach for effective hazardous waste management."
-        # Scale for Intuitionistic Fuzzy Numbers.
-        ACADEMIC_IFN_SCALE = {
-            1: (0.50, 0.40),
-            2: (0.55, 0.35),
-            3: (0.60, 0.30),
-            4: (0.65, 0.25),
-            5: (0.70, 0.20),
-            6: (0.75, 0.15),
-            7: (0.80, 0.10),
-            8: (0.85, 0.05),
-            9: (0.90, 0.05)  # Note: usually sum is < 1 to allow hesitation
         }
 
         self.FUZZY_IFN_SCALES: Dict[str, Dict[int, tuple]] = {
