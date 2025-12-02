@@ -82,12 +82,69 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
         row_geo_means.append(row_product.power(1.0 / n))
 
     total_sum = sum(row_geo_means, number_type.neutral_element())
-    if abs(total_sum.defuzzify(method=consistency_method)) < configure_parameters.FLOAT_TOLERANCE:
-        return [number_type.neutral_element() for _ in range(n)]
+
+    if abs(total_sum.defuzzify(method=consistency_method)) < 1e-9:
+        print("  - Warning: Geometric mean resulted in near-zero weights. Defaulting to equal weights.")
+        n = matrix.shape[0]
+        equal_weight_val = 1.0 / n
+        return [number_type.from_normalized(equal_weight_val) for _ in range(n)]
 
     sum_inverse = total_sum.inverse()
     weights = [geo_mean * sum_inverse for geo_mean in row_geo_means]
     return weights
+
+
+@register_weight_method('IFN', 'ifn_geometric_mean')
+def ifn_geometric_mean_method(matrix: np.ndarray, number_type: Type[IFN], consistency_method: str = "centroid", **kwargs) -> List[IFN]:
+    """
+    Derives IFN weights using the correct Intuitionistic Fuzzy Geometric Mean.
+    This method operates component-wise and avoids numerical decay.
+    Source: Xu, Z. (2007).
+    """
+    n = matrix.shape[0]
+    row_geo_means = []
+
+    for i in range(n):
+        row = matrix[i, :]
+
+        # --- CORRECT GEOMETRIC MEAN CALCULATION ---
+        # Geometric mean of the mu values
+        prod_mu = np.prod([cell.mu for cell in row])
+        geo_mean_mu = np.power(prod_mu, 1.0 / n)
+
+        # Geometric mean of (1 - nu) values
+        prod_1_minus_nu = np.prod([1 - cell.nu for cell in row])
+        geo_mean_1_minus_nu = np.power(prod_1_minus_nu, 1.0 / n)
+        geo_mean_nu = 1 - geo_mean_1_minus_nu
+
+        row_geo_means.append(number_type(geo_mean_mu, geo_mean_nu))
+
+    # --- Summation and Normalization (must also be done correctly) ---
+    # The sum of IFNs is A + B = (mu_a + mu_b - mu_a*mu_b, nu_a*nu_b)
+    total_sum = number_type.neutral_element() # IFN(0, 1)
+    for rgm in row_geo_means:
+        total_sum = total_sum + rgm
+
+    # The division A / B is not standard. Normalization is usually done by
+    # dividing the crisp scores. Let's do that for robustness.
+
+    # Defuzzify the geometric means
+    crisp_geo_means = np.array([rgm.defuzzify(method=consistency_method) for rgm in row_geo_means])
+
+    # Normalize the crisp values
+    crisp_sum = np.sum(crisp_geo_means)
+    if crisp_sum < 1e-9:
+        print("  - Warning: IFN geometric mean resulted in near-zero weights. Defaulting to equal weights.")
+        equal_weight = 1.0 / n
+        return [number_type.from_normalized(equal_weight) for _ in range(n)]
+
+    normalized_crisp_weights = crisp_geo_means / crisp_sum
+
+    # Re-fuzzify the normalized crisp weights back to IFNs with no hesitation
+    final_ifn_weights = [number_type.from_normalized(w) for w in normalized_crisp_weights]
+
+    # return final_ifn_weights
+    return row_geo_means
 
 @register_weight_method('Crisp', 'eigenvector')
 def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], **kwargs) -> List[Crisp]:
@@ -182,7 +239,7 @@ def extent_analysis_method(matrix: np.ndarray, number_type: Type[TFN]) -> Dict[s
     crisp_weights = min_degrees / weights_sum if weights_sum > 0 else np.full(n, 1/n)
 
     # Represent final weights as TFNs
-    fuzzy_weights = [number_type.from_crisp(w) for w in crisp_weights]
+    fuzzy_weights = [number_type.from_normalized(w) for w in crisp_weights]
 
     return {
         "weights": fuzzy_weights,
@@ -340,7 +397,7 @@ def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN], **kw
     result = minimize(objective, initial_guess, method='SLSQP', bounds=bounds, constraints=constraints)
     if not result.success:
         return {
-            "weights": [number_type.from_crisp(w) for w in initial_weights], # Return initial guess as a fallback
+            "weights": [number_type.from_normalized(w) for w in initial_weights], # Return initial guess as a fallback
             "crisp_weights": initial_weights,
             "lambda_consistency": -1.0, # Failure signal
             "optimization_success": False,
@@ -351,7 +408,7 @@ def mikhailov_fuzzy_programming(matrix: np.ndarray, number_type: Type[TFN], **kw
     lambda_consistency = result.x[-1]
 
     return {
-        "weights": [number_type.from_crisp(w) for w in crisp_weights],
+        "weights": [number_type.from_normalized(w) for w in crisp_weights],
         "crisp_weights": crisp_weights / np.sum(crisp_weights), # Final normalization
         "lambda_consistency": lambda_consistency,
         "optimization_success": result.success,
@@ -409,11 +466,27 @@ def derive_weights(
     elif isinstance(result, list):
         weights = result
         crisp_weights = np.array([w.defuzzify(method=consistency_method) for w in weights])
+        weight_sum = np.sum(crisp_weights)
+
+        if abs(weight_sum) < 1e-9:
+            # If the sum is zero, we cannot normalize. This indicates a failed derivation.
+            # We should return equal weights as a robust fallback.
+            print("  - Warning: Weight derivation resulted in an all-zero crisp weight vector. Defaulting to equal weights.")
+            n = matrix.shape[0]
+            normalized_crisp_weights = np.full(n, 1.0 / n)
+        else:
+            # Perform the normalization
+            normalized_crisp_weights = crisp_weights / weight_sum
+
+        # Return the safely normalized weights
         return {
             "weights": weights,
-            "crisp_weights": crisp_weights / np.sum(crisp_weights), # Normalize
-            "possibility_matrix": None, # Not applicable
-            "min_degrees": None # Not applicable
+            "crisp_weights": normalized_crisp_weights,
+            "possibility_matrix": None,
+            "min_degrees": None,
+            "lambda_consistency": None,
+            "optimization_success": None,
+            "optimization_message": None
         }
     else:
         raise TypeError(f"Registered method {derivation_func.__name__} returned an unexpected type: {type(result)}")

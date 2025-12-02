@@ -452,3 +452,77 @@ def aggregate_priorities_ifwa(
 
     from .types import IFN
     return IFN(agg_mu, agg_nu)
+
+
+def aggregate_priorities_tried(
+    matrices: List[np.ndarray],
+    derivation_method: str = "geometric_mean",
+    expert_weights: List[float] | None = None,
+    tolerance: float | None = None
+) -> List[Number]:
+    """
+    Aggregates priorities by first calculating individual weight vectors for each
+    expert's matrix and then combining these weight vectors.
+    This corresponds to the "Aggregation of Priorities" workflow.
+
+    .. note::
+        This method is useful when you want to weigh the final calculated
+        priorities of experts, rather than their initial judgments.
+
+    Args:
+        matrices: A list of comparison matrices from participants.
+        method (str): The method used to derive weights for each individual.
+        expert_weights (List[float], optional): A list of weights for each expert's
+                                                 final priority vector. If None,
+                                                 equal weights are assumed.
+
+    Returns:
+        A list of crisp priority vector (NumPy array).
+    """
+    if not matrices:
+        raise ValueError("Matrix list cannot be empty.")
+
+    from .weight_derivation import derive_weights
+    number_type = type(matrices[0][0, 0])
+
+    # 1. Calculate Individual Priority Vectors
+    individual_fuzzy_weights = [] # Store FUZZY weight vectors
+    individual_crisp_weights = [] # Store CRISP weight vectors
+
+    for matrix in matrices:
+        results = derive_weights(matrix, number_type, method=derivation_method)
+        individual_fuzzy_weights.append(results['weights'])
+        individual_crisp_weights.append(results['crisp_weights'])
+
+    # 2. Aggregate based on number type
+    if number_type.__name__ == 'IFN':
+        # --- FUZZY AIP WORKFLOW for IFN ---
+        # Transpose the list of fuzzy vectors
+        weights_per_criterion = list(zip(*individual_fuzzy_weights))
+
+        num_experts = len(matrices)
+        if expert_weights is None:
+            weights = [1.0 / num_experts] * num_experts
+        else: # Normalize expert_weights
+            weight_sum = sum(expert_weights)
+            weights = [w / weight_sum for w in expert_weights]
+
+        final_group_weights = []
+        for criterion_weights in weights_per_criterion:
+            # Aggregate the IFNs for one criterion from all experts using IFWA
+            prod_1_minus_mu = np.prod([(1 - p.mu) ** w for p, w in zip(criterion_weights, weights)])
+            prod_nu = np.prod([p.nu ** w for p, w in zip(criterion_weights, weights)])
+            agg_mu = 1 - prod_1_minus_mu
+            agg_nu = prod_nu
+            final_group_weights.append(number_type(agg_mu, agg_nu))
+
+        return final_group_weights # Return the final FUZZY weights
+
+    else:
+        # --- Standard CRISP aggregation for TFN, Crisp, etc. ---
+        weights_matrix = np.array(individual_crisp_weights)
+        # ... (your original logic to average the crisp weights)
+        final_group_priorities = np.average(weights_matrix, axis=0, weights=weights)
+
+        # Re-fuzzify the final crisp result
+        return [number_type.from_normalized(p) for p in final_group_priorities]

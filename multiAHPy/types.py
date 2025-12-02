@@ -3,6 +3,7 @@ import numpy as np
 from typing import Protocol, TypeVar, Union, Any, Dict, List, Callable, runtime_checkable
 from functools import total_ordering
 
+
 # ==============================================================================
 # 1. THE PROTOCOL BLUEPRINT
 # ==============================================================================
@@ -39,6 +40,10 @@ class NumericType(Protocol):
     def multiplicative_identity() -> 'NumericType': ...
     @staticmethod
     def from_crisp(value: float) -> 'NumericType': ...
+    @staticmethod
+    def from_saaty(value: float) -> 'NumericType': ...
+    @staticmethod
+    def from_normalized(value: float) -> 'NumericType': ...
     def power(self, exponent: float) -> 'NumericType': ...
     def alpha_cut(self, alpha: float) -> tuple[float, float]: ...
     def defuzzify(self, method: str = 'centroid', **kwargs) -> float: ...
@@ -64,7 +69,7 @@ class Crisp:
         This constructor is idempotent: Crisp(Crisp(5.0)) is valid.
         """
         if isinstance(value, Crisp):
-            self.value = value.value
+            self.value = value.valuez
         else:
             self.value = float(value)
 
@@ -127,6 +132,14 @@ class Crisp:
 
     @staticmethod
     def from_crisp(value: float) -> Crisp:
+        return Crisp(value)
+
+    @staticmethod
+    def from_saaty(value: float) -> Crisp:
+        return Crisp(value)
+
+    @staticmethod
+    def from_normalized(value: float) -> Crisp:
         return Crisp(value)
 
     def power(self, exponent: float) -> Crisp:
@@ -272,6 +285,19 @@ class TFN:
 
     @staticmethod
     def from_crisp(value: float) -> TFN:
+        return TFN(value, value, value)
+
+    @staticmethod
+    def from_saaty(value: float, scale: str = "linear") -> TFN:
+        """Uses FuzzyScale to create a TFN with spread (e.g., TFN(2,3,4))."""
+        # We need to import FuzzyScale locally to avoid circular imports
+        from .matrix_builder import FuzzyScale
+        # We call the main converter, which handles scales and reciprocals
+        return FuzzyScale.get_fuzzy_number(value, TFN, scale=scale) # Use a default scale
+
+    @staticmethod
+    def from_normalized(value: float) -> TFN:
+        """Creates a 'crisp' TFN (e.g., TFN(0.8, 0.8, 0.8)) from a normalized value."""
         return TFN(value, value, value)
 
     def power(self, exponent: float) -> TFN:
@@ -444,6 +470,15 @@ class TrFN:
         return TrFN(value, value, value, value)
 
     @staticmethod
+    def from_saaty(value: float) -> TrFN:
+        from .matrix_builder import FuzzyScale
+        return FuzzyScale.get_fuzzy_number(value, TrFN, scale='linear')
+
+    @staticmethod
+    def from_normalized(value: float) -> TrFN:
+        return TrFN(value, value, value, value)
+
+    @staticmethod
     def from_tfn(tfn: TFN) -> TrFN:
         """Converts a TFN to a degenerate TrFN."""
         return TrFN(tfn.l, tfn.m, tfn.m, tfn.u)
@@ -493,7 +528,8 @@ class IFN:
     """
     _defuzzify_methods: Dict[str, Callable] = {}
 
-    def __init__(self, mu: float, nu: float):
+    def __init__(self, mu: float, nu: float, ifn_scale_name: str = None):
+        from .config import configure_parameters
         mu, nu = float(mu), float(nu)
         if not (0 <= mu <= 1 and 0 <= nu <= 1):
             raise ValueError("Membership (mu) and non-membership (nu) must be between 0 and 1.")
@@ -502,6 +538,12 @@ class IFN:
         self.mu = mu
         self.nu = nu
         self.pi = 1.0 - self.mu - self.nu
+        self.ifn_scale_name = ifn_scale_name
+        self.ifn_scale = None
+        if self.ifn_scale_name is None:
+            self.ifn_scale = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS["buyukozkan_9_level"]
+        else:
+            self.ifn_scale = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS[self.ifn_scale_name]
 
     def __repr__(self) -> str:
         return f"IFN(μ={self.mu:.4f}, ν={self.nu:.4f})"
@@ -511,10 +553,12 @@ class IFN:
         if isinstance(other, IFN): return other
         # A crisp number has no hesitation, so
         # ν = 1 - μ
-        val = other.value if hasattr(other, 'value') else float(other)
-        if not (0 <= val <= 1):
-            raise ValueError("Cannot perform arithmetic with crisp value outside [0,1] against an IFN.")
-        return IFN(mu=val, nu=1-val)
+        if not isinstance(other, IFN):
+            key = other.value if hasattr(other, 'value') else float(other)
+            val = self.ifn_scale[key]
+            return IFN(mu=val[0], nu=1-val[1])
+        else:
+            return IFN(mu=other.mu, nu=other.nu)
 
     def __add__(self, other: IFN) -> IFN:
         if not isinstance(other, IFN): return NotImplemented
@@ -534,7 +578,36 @@ class IFN:
     # is useful for AHP. They are often context-specific or not used at all.
     # Returning NotImplemented is the correct, safe approach.
     def __sub__(self, other): return NotImplemented
-    def __truediv__(self, other): return NotImplemented
+
+    def __truediv__(self, scalar: float) -> IFN:
+        """
+        Performs scalar division on an IFN (A / λ), where λ is a crisp number.
+        This is a crucial operation for normalizing a set of fuzzy weights.
+
+        The formula ensures that the 'score' of the resulting IFN is scaled
+        proportionally, while preserving the core structure.
+        """
+        if not isinstance(scalar, (int, float, np.number)):
+            return NotImplemented
+        if scalar <= 0:
+            raise ZeroDivisionError("Cannot divide an IFN by a non-positive scalar.")
+
+        # This normalization formula is derived from several sources on IFN arithmetic
+        # to ensure that the score function behaves somewhat linearly for λ > 1.
+        # Score = μ + α*π. We want Score' ≈ Score / λ
+
+        # A simple and effective scaling is to scale the membership and hesitation.
+        # This is a robust heuristic.
+
+        original_score = self.defuzzify(method='centroid') # Get score with hesitation
+        target_score = original_score / scalar
+
+        # Use our robust constructor to build the new, scaled IFN
+        # We scale the hesitation by the same factor.
+        scaled_hesitation = self.pi / scalar
+
+        return IFN.from_score_and_hesitation(target_score, scaled_hesitation)
+
     def __radd__(self, other): return self.__add__(other)
     def __rmul__(self, other): return self.__mul__(other)
     def __rsub__(self, other): return NotImplemented
@@ -596,15 +669,159 @@ class IFN:
         return IFN(1.0, 0.0)
 
     @staticmethod
-    def from_crisp(value: float) -> IFN:
+    def from_crisp_retired(value: float) -> IFN:
         """Creates an IFN from a crisp value [0,1], assuming no hesitation."""
         if not (0 <= value <= 1):
             raise ValueError("Crisp value for IFN conversion must be between 0 and 1.")
         return IFN(mu=value, nu=1.0 - value)
 
+    @staticmethod
+    def from_saaty(value: float) -> IFN:
+        """
+        Creates an IFN from a crisp Saaty-scale value (e.g., 1-9 and reciprocals).
+
+        This method uses a precise interpolation function for non-integer values
+        and correctly handles reciprocals.
+
+        Args:
+            value: The Saaty-scale judgment (e.g., 3.5, 1/5).
+            interpolation_func: A function that takes a float and returns a
+                                tuple (mu, nu). If None, a simple rounding
+                                method is used as a fallback.
+        """
+        from .config import configure_parameters
+        interpolation_func = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS.get("buyukozkan_9_level")
+
+        if value <= 0:
+            raise ValueError("Saaty-scale value must be positive.")
+
+        # Handle the base case of "equal importance"
+        if np.isclose(value, 1.0):
+            # The Nguyen scale for 1 is (0.50, 0.40)
+            from .config import configure_parameters # Local import for safety
+            return IFN(*configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS['buyukozkan_9_level'](1.0))
+
+        is_reciprocal = False
+        if value < 1:
+            is_reciprocal = True
+            value = 1.0 / value
+
+        # Use the provided interpolation function for precision
+        if interpolation_func:
+            mu, nu = interpolation_func(value)
+        else:
+            # Fallback if no function is provided: round to nearest integer key
+            from .config import configure_parameters
+            key = int(round(np.clip(value, 1, 9)))
+            mu, nu = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS['buyukozkan_9_level'](float(key))
+
+        if is_reciprocal:
+            return IFN(mu=nu, nu=mu)  # Return the inverse
+        else:
+            return IFN(mu=mu, nu=nu)
+
+    @staticmethod
+    def from_saaty_with_consistency(
+        value: float,
+        matrix_cr: float,
+        hesitation_factor: float = 0.2,
+        scale_base: int = 9
+    ) -> IFN:
+        """
+        Çetin & Gündüz (2026): Creates an IFN from a Saaty-scale value, where the hesitation (pi) is
+        dynamically calculated based on the consistency of the source matrix.
+
+        Args:
+            value (float): The crisp Saaty-scale judgment (e.g., 3.0, 1/5).
+            matrix_cr (float): The Consistency Ratio of the matrix where the
+                               judgment originated.
+            hesitation_factor (float, optional): The maximum hesitation to assign
+                                                 (beta parameter). Defaults to 0.2.
+            scale_base (int, optional): The base of the Saaty scale (e.g., 9).
+                                        Defaults to 9.
+        """
+        if value <= 0:
+            raise ValueError("Saaty-scale value must be positive.")
+
+        # 1. Calculate Hesitation (pi)
+        pi = hesitation_factor * max(min(abs(matrix_cr), 1.0), 0.05)
+
+        # 2. Calculate Linguistic Anchor (l)
+        # We use a small epsilon to avoid log(0) if value is extremely small,
+        # though the check above should prevent it.
+        log_val = np.log(value) / np.log(scale_base) # log_base(value)
+        linguistic_anchor = (log_val + 1) / 2.0
+
+        # 3. Calculate Membership (mu)
+        mu = (1 - pi) * linguistic_anchor
+
+        # 4. Calculate Non-membership (nu)
+        nu = 1 - mu - pi
+
+        # Final clipping for safety and to handle floating point inaccuracies
+        mu = np.clip(mu, 0, 1)
+        nu = np.clip(nu, 0, 1)
+        if mu + nu > 1.0:
+            nu = 1.0 - mu
+
+        return IFN(mu, nu)
+
+    @staticmethod
+    def from_normalized(value: float) -> IFN:
+        """
+        Creates an IFN from a normalized value (e.g., weight or performance score)
+        in the [0, 1] range, assuming no hesitation.
+        """
+        if not (0 <= value <= 1):
+            raise ValueError("Normalized value for IFN conversion must be between 0 and 1.")
+        return IFN(mu=value, nu=1.0 - value)
+
+    @staticmethod
+    def from_crisp(value: float) -> IFN:
+        """
+        Default crisp conversion method. Assumes the value is from the Saaty scale.
+        For converting normalized [0,1] values, use `from_normalized()` instead.
+        """
+        return IFN.from_saaty(value)
+
+    @staticmethod
+    def from_score_and_hesitation(score: float, hesitation: float, alpha: float = 0.5) -> IFN:
+        """
+        Constructs an IFN from a target defuzzified score and a hesitation value.
+        This is the reverse of the Xu-Yager defuzzification.
+
+        score = μ + α * π
+        μ + ν + π = 1
+        """
+        score = np.clip(score, 0, 1)
+        pi = np.clip(hesitation, 0, 1)
+
+        # from score = μ + α*π  =>  μ = score - α*π
+        mu = score - alpha * pi
+
+        # nu = 1 - μ - π
+        nu = 1 - mu - pi
+
+        # Final check and correction for validity.
+        # If this process made `mu` or `nu` invalid (e.g., negative), it means the
+        # hesitation is too large for the score. We must adjust.
+        if mu < 0 or nu < 0 or mu + nu > 1:
+            # If `mu` went negative, it means `alpha * pi > score`.
+            # In this case, the score is entirely composed of hesitation.
+            mu = 0
+            # The new hesitation must be such that `alpha * pi_new = score`
+            pi_new = score / alpha if alpha > 0 else 0
+            pi_new = min(pi_new, 1.0) # Hesitation cannot be > 1
+
+            nu = 1 - pi_new
+            pi = pi_new # Update pi for the final object
+
+        # Create the IFN. Our constructor has built-in validation.
+        return IFN(mu, nu)
+
     def alpha_cut(self, alpha: float): return NotImplemented
 
-    def defuzzify(self, method: str = 'score', **kwargs) -> float:
+    def defuzzify(self, method: str = 'centroid', **kwargs) -> float:
         """
         Defuzzifies the IFN into a crisp value using various registered methods.
 

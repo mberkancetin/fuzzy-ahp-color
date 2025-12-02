@@ -105,7 +105,15 @@ class MethodSuggester:
             recipe['aggregation_method'] = None
         else:
             if recipe['number_type'] == IFN:
-                recipe['aggregation_method'] = 'ifwa'
+                if aggregation_goal == "average":
+                    recipe['aggregation_method'] = 'ifwa'
+                elif aggregation_goal == "consensus":
+                    recipe['aggregation_method'] = 'consensus' # <-- This method uses IFWA internally
+                else:
+                    # 'median' and 'envelope' are not standardly defined for IFNs.
+                    # The suggester should warn the user and provide a sensible default.
+                    print(f"Warning: Aggregation goal '{aggregation_goal}' is not standard for IFN. Defaulting to 'ifwa'.")
+                    recipe['aggregation_method'] = 'ifwa'
             else:
                 if aggregation_goal == "average":
                     recipe['aggregation_method'] = 'geometric'
@@ -118,7 +126,7 @@ class MethodSuggester:
 
         # --- Suggest Weight Derivation Method ---
         if recipe['number_type'] == IFN:
-             recipe['weight_derivation_method'] = 'geometric_mean'
+             recipe['weight_derivation_method'] = 'ifn_geometric_mean'
              print("Guidance: For IFN, also consider using 'aggregate_priorities_ifwa' for group decisions.")
         else:
             if weight_derivation_goal == "stable_and_simple":
@@ -129,8 +137,8 @@ class MethodSuggester:
                 recipe['weight_derivation_method'] = 'fuzzy_programming'
 
         # --- Suggest Defuzzification Method ---
-        if recipe['number_type'] == IFN:
-            recipe['consistency_method'] = 'normalized_score'
+        if recipe['number_type'] == TFN:
+            recipe['consistency_method'] = 'graded_mean'
         else:
             recipe['consistency_method'] = 'centroid'
 

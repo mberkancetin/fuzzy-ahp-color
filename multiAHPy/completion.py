@@ -341,7 +341,7 @@ def complete_by_type_agnostic_llsm(incomplete_matrix: np.ndarray, **kwargs) -> n
             for j in range(n):
                 if completed_matrix[i, j] is None or (isinstance(completed_matrix[i, j], float) and np.isnan(completed_matrix[i, j])):
                     crisp_value = weights[i] / weights[j]
-                    completed_matrix[i, j] = number_type.from_crisp(crisp_value)
+                    completed_matrix[i, j] = number_type.from_saaty(crisp_value)
         return completed_matrix
 
     else:
@@ -430,7 +430,7 @@ def complete_by_type_agnostic_eigenvalue_optimization(
         completed_fuzzy_matrix = np.empty((n, n), dtype=object)
         for i in range(n):
             for j in range(n):
-                completed_fuzzy_matrix[i, j] = number_type.from_crisp(crisp_matrix[i, j])
+                completed_fuzzy_matrix[i, j] = number_type.from_saaty(crisp_matrix[i, j])
         return completed_fuzzy_matrix
     else:
         return crisp_matrix
@@ -486,7 +486,7 @@ def complete_by_type_agnostic_dematel(incomplete_matrix: np.ndarray, **kwargs) -
     row_sums = np.sum(drm, axis=1)
     max_sum = np.max(row_sums)
     if max_sum < 1e-9:
-        return np.ones((n, n)) if not is_input_fuzzy else np.array([[number_type.from_crisp(1.0)]*n]*n, dtype=object)
+        return np.ones((n, n)) if not is_input_fuzzy else np.array([[number_type.from_saaty(1.0)]*n]*n, dtype=object)
 
     normalized_drm = drm / max_sum
     identity = np.identity(n)
@@ -506,9 +506,9 @@ def complete_by_type_agnostic_dematel(incomplete_matrix: np.ndarray, **kwargs) -
                 if trm[j, i] > 1e-9:
                     ratio = trm[i, j] / trm[j, i]
                     crisp_value = np.sqrt(ratio) if ratio > 0 else 1.0
-                    completed_fuzzy_matrix[i, j] = number_type.from_crisp(crisp_value)
+                    completed_fuzzy_matrix[i, j] = number_type.from_saaty(crisp_value)
                 else:
-                    completed_fuzzy_matrix[i, j] = number_type.from_crisp(1.0)
+                    completed_fuzzy_matrix[i, j] = number_type.from_saaty(1.0)
         return completed_fuzzy_matrix
 
     else:

@@ -54,8 +54,8 @@ class FuzzyScale:
         Returns:
             An instance of the specified fuzzy number type.
         """
-        if scale not in configure_parameters.FUZZY_TFN_SCALES:
-            if scale not in configure_parameters.FUZZY_IFN_SCALES:
+        if scale not in configure_parameters.FUZZY_TFN_SCALES_FUNCTIONS:
+            if scale not in configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS:
                 raise ValueError(f"Unknown scale: '{scale}'. Available scales: {FuzzyScale.available_tfn_scales()}")
 
         if not isinstance(crisp_value, (int, float, np.number)):
@@ -103,11 +103,11 @@ class FuzzyScale:
             scale_func = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS.get(scale)
             if scale_func is None:
                 if scale not in configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS:
-                     print(f"Warning: IFN scale '{scale}' not found. Defaulting to 'nguyen_9_level'.")
-                     scale_func = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS['nguyen_9_level']
+                     print(f"Warning: IFN scale '{scale}' not found. Defaulting to 'buyukozkan_9_level'.")
+                     scale_func = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS['buyukozkan_9_level']
             params = scale_func(value)
         elif type_name == 'IT2TrFN':
-            l, m, u = configure_parameters.FUZZY_TFN_SCALES[scale][abs(crisp_value)]
+            l, m, u = configure_parameters.FUZZY_TFN_SCALES_FUNCTIONS[scale][abs(crisp_value)]
 
             umf = TrFN.from_tfn(TFN(max(1, m-umf_spread), m, m+umf_spread))
             lmf = TrFN.from_tfn(TFN(m-lmf_spread, m, m+lmf_spread))

@@ -2,11 +2,12 @@ from __future__ import annotations
 import numpy as np
 import json
 import pickle
-from typing import Dict, List, Optional, Tuple, Any, Type, Generic
+from typing import Dict, List, Optional, Tuple, Any, Type, Generic, Literal
 from .consistency import Consistency
 from .weight_derivation import derive_weights
-from .types import TFN, Number
+from .types import TFN, IFN, Number
 from copy import deepcopy
+import copy
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -98,12 +99,35 @@ class Node(Generic[Number]):
         Recursively calculates the global weights for this node's children.
         Assumes its own global_weight has already been set.
         """
-        for child in self.children:
-            if self.global_weight is None or child.local_weight is None:
-                raise ValueError(f"Cannot calculate global weight for '{child.id}', as parent or local weight is missing.")
+        if self.global_weight.__class__.__name__ == 'IFN':
+            parent_global_score = self.global_weight.defuzzify(method='centroid')
+            parent_global_pi = self.global_weight.pi
 
-            child.global_weight = self.global_weight * child.local_weight
-            child.calculate_global_weights()
+            for child in self.children:
+                if child.local_weight is None:
+                    raise ValueError(f"Cannot calculate global weight for '{child.id}', local weight is missing.")
+
+                # Get the child's local score and hesitation
+                child_local_score = child.local_weight.defuzzify(method='centroid')
+                child_local_pi = child.local_weight.pi
+
+                # 1. The final global score is the product of the crisp scores.
+                child_global_score = parent_global_score * child_local_score
+
+                # 2. The final global hesitation is a combination of parent and child hesitation.
+                #    A common and defensible model is that uncertainty increases. The union (1 - (1-p1)*(1-p2))
+                #    is a good model for combining probabilities.
+                child_global_pi = 1 - (1 - parent_global_pi) * (1 - child_local_pi)
+
+                # 3. Reconstruct the final global weight IFN from its new score and hesitation.
+                #    We use the robust constructor that prevents mu=0.
+                child.global_weight = self.global_weight.__class__.from_score_and_hesitation(
+                    child_global_score, child_global_pi
+                )
+
+                # 4. Recurse down the tree
+                if not child.is_leaf:
+                    child.calculate_global_weights()
 
     def get_all_leaf_nodes(self) -> List[Node[Number]]:
         """
@@ -116,6 +140,13 @@ class Node(Generic[Number]):
         for child in self.children:
             leaves.extend(child.get_all_leaf_nodes())
         return leaves
+
+    def get_all_nodes(self) -> List[Node]:
+        """Recursively finds all nodes (including self) under this node."""
+        nodes = [self]
+        for child in self.children:
+            nodes.extend(child.get_all_nodes())
+        return nodes
 
     def judgments_to_table(
         self,
@@ -184,6 +215,29 @@ class Alternative(Generic[Number]):
     def __repr__(self):
         score_str = f"{self.overall_score:.4f}" if self.overall_score is not None else "N/A"
         return f"Alternative(name='{self.name}', overall_score={score_str})"
+
+    def __deepcopy__(self, memo):
+        """
+        Custom deepcopy implementation for the Alternative class.
+        This creates a new Alternative but intentionally does NOT copy the
+        cached results (`node_scores`, `overall_score`), ensuring that any
+        new analysis starts with a clean slate.
+        """
+        # Create a new, blank instance of the class
+        cls = self.__class__
+        new_alt = cls.__new__(cls)
+        memo[id(self)] = new_alt # Add to memo to prevent infinite loops
+
+        # Copy the fundamental attributes, but not the results
+        new_alt.name = self.name
+        new_alt.description = self.description
+        new_alt.performance_scores = copy.deepcopy(self.performance_scores, memo)
+
+        # Intentionally create empty result caches for the new object
+        new_alt.node_scores = {}
+        new_alt.overall_score = None
+
+        return new_alt
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes the Alternative to a JSON-compatible dictionary."""
@@ -388,6 +442,9 @@ class Hierarchy(Generic[Number]):
                 return found
         return None
 
+    def get_all_nodes(self):
+        return self.root.get_all_nodes()
+
     def set_comparison_matrix(self, parent_node_id: str, matrix: np.ndarray):
         """
         Sets the pairwise comparison matrix for the children of a given parent node.
@@ -415,7 +472,7 @@ class Hierarchy(Generic[Number]):
                     converted_matrix[i, j] = cell
                 else:
                     try:
-                        converted_matrix[i, j] = target_type.from_crisp(cell)
+                        converted_matrix[i, j] = target_type.from_saaty(cell)
                     except Exception as e:
                         raise TypeError(f"Could not convert cell at ({i},{j}) with value '{cell}' to type '{target_type.__name__}'. Error: {e}")
 
@@ -450,7 +507,7 @@ class Hierarchy(Generic[Number]):
                     converted_matrix[i, j] = cell
                 else:
                     try:
-                        converted_matrix[i, j] = target_type.from_crisp(cell)
+                        converted_matrix[i, j] = target_type.from_saaty(cell)
                     except Exception as e:
                         raise TypeError(f"Could not convert cell at ({i},{j}) with value '{cell}' to type '{target_type.__name__}'. Error: {e}")
 
@@ -484,6 +541,33 @@ class Hierarchy(Generic[Number]):
                 child_node.local_weight = weights[i]
         for child in node.children:
             self._calculate_local_weights_recursive(child, method)
+
+    def _recalculate_global_weights(self):
+        """
+        Recursively recalculates all global weights in the hierarchy based on
+        the currently set local weights.
+
+        This method does NOT re-derive weights from matrices. It's used for
+        sensitivity analysis where local weights are adjusted manually.
+        """
+        # Ensure the root is set up correctly
+        if self.root.global_weight is None:
+            self.root.global_weight = self.number_type.multiplicative_identity()
+        # Start the propagation from the root node
+        self._propagate_weights(self.root)
+
+    def _propagate_weights(self, node: Node):
+        # For each child, calculate its global weight and then recurse
+        for child in node.children:
+            if node.global_weight is None or child.local_weight is None:
+                # This might happen if weights were never calculated at all
+                raise RuntimeError(f"Cannot propagate weights: parent '{node.id}' or child '{child.id}' has a missing weight.")
+
+            # The core logic: global_child = global_parent * local_child
+            child.global_weight = node.global_weight * child.local_weight
+
+            # Recurse down the tree
+            self._propagate_weights(child)
 
     def rank_alternatives_by_comparison(self, derivation_method: str = 'geometric_mean'):
         """
@@ -540,7 +624,7 @@ class Hierarchy(Generic[Number]):
         """
         if node.is_leaf:
             priority_value = alt_local_priorities[node.id][alternative_index]
-            return self.number_type.from_crisp(priority_value)
+            return self.number_type.from_normalized(priority_value)
 
         total_score = self.number_type.neutral_element()
         for child in node.children:
@@ -596,6 +680,58 @@ class Hierarchy(Generic[Number]):
 
         return weights_dict
 
+    def get_child_weights(
+        self,
+        parent_node_id: str,
+        weight_type: Literal["local", "global"] = "local"
+    ) -> Dict[str, float]:
+        """
+        Returns the final weights of the children of a specified parent node.
+
+        Args:
+            parent_node_id (str): The ID of the parent node whose children's
+                                weights are to be retrieved.
+            weight_type (str, optional): The type of weight to return.
+                                        - 'local': (Default) The weights of the children
+                                                    relative to their parent (should sum to 1.0).
+                                        - 'global': The weights of the children relative
+                                                    to the overall goal.
+
+        Returns:
+            A dictionary mapping { 'child_node_id': crisp_weight }.
+        """
+        parent_node = self._find_node(parent_node_id)
+        if parent_node is None:
+            raise ValueError(f"Parent node '{parent_node_id}' not found.")
+
+        weights_dict = {}
+        for child in parent_node.children:
+            weight_to_get = None
+            if weight_type == "local":
+                weight_to_get = child.local_weight
+            elif weight_type == "global":
+                weight_to_get = child.global_weight
+            else:
+                raise ValueError("weight_type must be 'local' or 'global'.")
+
+            if weight_to_get is None:
+                raise RuntimeError(f"Weight of type '{weight_type}' has not been calculated for node '{child.id}'. Run `calculate_weights()` first.")
+
+            # Use the default, safe defuzzification method
+            weights_dict[child.id] = weight_to_get.defuzzify()
+
+        # --- NORMALIZATION SAFEGUARD ---
+        # The local weights of a set of siblings should always sum to 1.0.
+        # We add a normalization step here to correct for any minor floating-point
+        # artifacts from fuzzy arithmetic.
+        if weight_type == "local":
+            total_weight = sum(weights_dict.values())
+            if abs(total_weight) > 1e-9:
+                for child_id in weights_dict:
+                    weights_dict[child_id] /= total_weight
+
+        return weights_dict
+
     def score_alternatives_by_performance(self):
         """
         Calculates final scores for alternatives based on pre-defined performance scores.
@@ -606,19 +742,101 @@ class Hierarchy(Generic[Number]):
         2. Each alternative has a normalized performance score (0 to 1) set for EVERY
         leaf node using `alt.set_performance_score()`.
         """
-        print("\n--- Scoring Alternatives via Performance Data ---")
         if not self.alternatives:
             print("Warning: No alternatives to score.")
             return
 
-        leaf_nodes = self.root.get_all_leaf_nodes()
-        leaf_node_ids = sorted([leaf.id for leaf in leaf_nodes])
+        if self.number_type.__name__ == 'IFN':
+            leaf_nodes = self.root.get_all_leaf_nodes()
 
-        # The rest of the function remains the same
-        for alt in self.alternatives:
-            for leaf_id in leaf_node_ids:
-                if leaf_id not in alt.performance_scores:
-                    raise ValueError(f"Missing performance score for leaf node '{leaf_id}' in alternative '{alt.name}'. Use `alt.set_performance_score()`.")
+            for alt in self.alternatives:
+                # Gather the performance scores and weights for this alternative
+                perf_scores_as_ifn = []
+                leaf_global_weights = []
+
+                for leaf in leaf_nodes:
+                    if leaf.id not in alt.performance_scores:
+                        raise ValueError(f"Missing score for leaf '{leaf.id}' in alt '{alt.name}'.")
+
+                    # Convert the crisp performance score to an IFN
+                    perf_score_val = alt.get_performance_score(leaf.id)
+                    perf_scores_as_ifn.append(self.number_type.from_normalized(perf_score_val))
+
+                    # Get the crisp global weight of the leaf criterion
+                    # We must use a safe, positive defuzzification method
+                    leaf_global_weights.append(leaf.global_weight.defuzzify(method='centroid'))
+
+                # Normalize the crisp weights to be sure they sum to 1
+                weight_sum = sum(leaf_global_weights)
+                normalized_weights = [w / weight_sum for w in leaf_global_weights]
+
+                # --- Apply the IFWA formula ---
+                # This is the same formula as in your `aggregate_priorities_ifwa`
+                prod_1_minus_mu = np.prod([(1 - p.mu) ** w for p, w in zip(perf_scores_as_ifn, normalized_weights)])
+                prod_nu = np.prod([p.nu ** w for p, w in zip(perf_scores_as_ifn, normalized_weights)])
+
+                agg_mu = 1 - prod_1_minus_mu
+                agg_nu = prod_nu
+
+                alt.overall_score = self.number_type(agg_mu, agg_nu)
+
+        else:
+            for alt in self.alternatives:
+                alt.overall_score = self._calculate_performance_score_recursive(self.root, alt)
+
+        print("Alternative performance scoring complete.")
+
+    def score_alternatives_by_performance_ifwa(self):
+        """
+        Calculates final scores for alternatives based on pre-defined performance scores.
+        This is the 'AHP as a Weighting Engine' or 'Scoring Model' workflow.
+
+        This method requires that:
+        1. Criteria weights have been calculated with `calculate_weights()`.
+        2. Each alternative has a normalized performance score (0 to 1) set for EVERY
+        leaf node using `alt.set_performance_score()`.
+        """
+        if not self.alternatives:
+            print("Warning: No alternatives to score.")
+            return
+
+        if self.number_type.__name__ == 'IFN':
+
+            leaf_nodes = self.root.get_all_leaf_nodes()
+
+            for alt in self.alternatives:
+                # Gather the performance scores and weights for this alternative
+                perf_scores_as_ifn = []
+                leaf_global_weights = []
+
+                for leaf in leaf_nodes:
+                    if leaf.id not in alt.performance_scores:
+                        raise ValueError(f"Missing score for leaf '{leaf.id}' in alt '{alt.name}'.")
+
+                    # Convert the crisp performance score to an IFN
+                    perf_score_val = alt.get_performance_score(leaf.id)
+                    perf_scores_as_ifn.append(self.number_type.from_normalized(perf_score_val))
+
+                    # Get the crisp global weight of the leaf criterion
+                    # We must use a safe, positive defuzzification method
+                    leaf_global_weights.append(leaf.global_weight.defuzzify(method='centroid'))
+
+                # Normalize the crisp weights to be sure they sum to 1
+                weight_sum = sum(leaf_global_weights)
+                normalized_weights = [w / weight_sum for w in leaf_global_weights]
+
+                # --- Apply the IFWA formula ---
+                # This is the same formula as in your `aggregate_priorities_ifwa`
+                prod_1_minus_mu = np.prod([(1 - p.mu) ** w for p, w in zip(perf_scores_as_ifn, normalized_weights)])
+                prod_nu = np.prod([p.nu ** w for p, w in zip(perf_scores_as_ifn, normalized_weights)])
+
+                agg_mu = 1 - prod_1_minus_mu
+                agg_nu = prod_nu
+
+                alt.overall_score = self.number_type(agg_mu, agg_nu)
+
+        else:
+            for alt in self.alternatives:
                 alt.overall_score = self._calculate_performance_score_recursive(self.root, alt)
 
         print("Alternative performance scoring complete.")
@@ -632,7 +850,7 @@ class Hierarchy(Generic[Number]):
             return alt.node_scores[node.id]
 
         if node.is_leaf:
-            score = self.number_type.from_crisp(alt.performance_scores[node.id])
+            score = self.number_type.from_normalized(alt.performance_scores[node.id])
             alt.node_scores[node.id] = score
             return score
 
@@ -652,9 +870,9 @@ class Hierarchy(Generic[Number]):
 
         Args:
             consistency_method (str, optional): The method to use for defuzzification.
-                                              Defaults to 'centroid'.
+                                            Defaults to 'centroid'.
             **kwargs: Additional arguments to pass to the defuzzification function
-                      (e.g., alpha for alpha_cut).
+                    (e.g., alpha for alpha_cut).
 
         Returns:
             List[Tuple[str, float]]: A sorted list of (alternative_name, crisp_score).
@@ -749,7 +967,7 @@ class Hierarchy(Generic[Number]):
             target: For 'excel'/'csv', the path. For 'gsheet' (create mode), the new sheet's name.
             output_format: 'excel', 'csv', or 'gsheet'.
             spreadsheet_id (optional): If provided for 'gsheet', the script will open and
-                                       update this existing spreadsheet by its ID/key.
+                                    update this existing spreadsheet by its ID/key.
             derivation_method: str = 'geometric_mean', # comparison matrix weight derivation methods
                 The method to use, one of:
                     Crisp: "geometric_mean", "eigenvector"

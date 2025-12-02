@@ -19,7 +19,7 @@ def available_methods() -> dict:
         "TFN": ["centroid", "graded_mean", "alpha_cut", "weighted_average", "pessimistic", "optimistic"],
         "TrFN": ["centroid", "average"],
         "GNF": ["centroid", "pessimistic_99_percent"],
-        "IFN": ['centroid', 'score', 'entropy', 'accuracy', 'value']
+        "IFN": ['centroid', 'score', 'normalized_score', 'entropy', 'accuracy', 'value']
     }
 
 def normalize_crisp_weights(crisp_weights: np.ndarray) -> np.ndarray:
@@ -275,6 +275,27 @@ def modal_transform_ifn(ifn: IFN, alpha: float = 0.5, beta: float = 0.0, **kwarg
 
     return final_score
 
+def xu_yager_scoring_ifn(ifn: IFN, alpha: float = 0.5) -> float:
+    """
+    Calculates a normalized score that incorporates the hesitation degree (pi).
+    Based on Xu and Yager (2006), this allows for modeling different attitudes
+    towards uncertainty.
+
+    Formula: S = mu + alpha * pi
+
+    Args:
+        ifn (IFN): The Intuitionistic Fuzzy Number to defuzzify.
+        alpha (float, optional): The attitudinal parameter (0=pessimistic,
+                                 0.5=neutral, 1=optimistic). Defaults to 0.5.
+
+    Returns:
+        A crisp score on a [0, 1] scale.
+    """
+    if not (0 <= alpha <= 1):
+        raise ValueError("Alpha parameter must be between 0 and 1.")
+
+    return ifn.mu + alpha * ifn.pi
+
 # ==============================================================================
 # 2. REGISTRATION
 # ==============================================================================
@@ -303,7 +324,8 @@ GFN.register_defuzzify_method('pessimistic_99_percent', pessimistic_method_gfn)
 # hesitation degree (π = 1 - μ - ν) is handled.
 IFN.register_defuzzify_method('score', score_method_ifn)
 IFN.register_defuzzify_method('normalized_score', chen_tan_scoring_ifn)
-IFN.register_defuzzify_method('centroid', chen_tan_scoring_ifn) # 'centroid' is an alias for 'normalized_score'
+IFN.register_defuzzify_method('centroid', xu_yager_scoring_ifn) # 'centroid' is an alias for 'xu_yager'
+IFN.register_defuzzify_method('xu_yager', xu_yager_scoring_ifn) 
 IFN.register_defuzzify_method('accuracy', accuracy_method_ifn)
 IFN.register_defuzzify_method('value', value_method_ifn)
 IFN.register_defuzzify_method('entropy', entropy_method_ifn)

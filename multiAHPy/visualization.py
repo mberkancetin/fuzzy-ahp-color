@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, List, Dict, Optional, Tuple, Union, Any
 import uuid
 import numpy as np
+import copy
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.patches import Polygon
@@ -18,6 +19,7 @@ except ImportError:
     _PLOT_AVAILABLE = False
 
 if TYPE_CHECKING:
+    from .pipeline import Workflow
     from .model import Hierarchy, Node
     from .types import NumericType, Number, TFN, Crisp
 
@@ -470,7 +472,7 @@ def plot_sensitivity_analysis(
 
     for new_weight in weight_range:
         # Temporarily set the new weight for the criterion being varied
-        criterion_to_vary.local_weight = model.number_type.from_crisp(new_weight)
+        criterion_to_vary.local_weight = model.number_type.from_normalized(new_weight)
 
         # Redistribute the remaining weight among the OTHER siblings proportionally
         siblings_to_adjust = [c for c in parent_node.children if c.id != criterion_to_vary_id]
@@ -480,7 +482,7 @@ def plot_sensitivity_analysis(
         if current_siblings_weight_sum > 0:
             for sibling in siblings_to_adjust:
                 proportion = original_sibling_weights[sibling.id].defuzzify() / current_siblings_weight_sum
-                sibling.local_weight = model.number_type.from_crisp(remaining_weight * proportion)
+                sibling.local_weight = model.number_type.from_normalized(remaining_weight * proportion)
 
         # Recalculate global weights and scores with the temporary weights
         model.calculate_weights()
@@ -1030,3 +1032,250 @@ def _export_to_gsheet(
     except Exception as e:
         print(f"\n❌ An error occurred during Google Sheets export: {e}")
         print("   Please ensure you are running in a Google Colab environment and have granted permissions.")
+
+
+class SensitivityAnalyzerRetired:
+    """
+    Performs One-at-a-Time (OAT) sensitivity analysis on a fitted AHP model.
+    """
+    def __init__(self, model: 'Hierarchy'):
+        if model.get_criteria_weights is None:
+            raise RuntimeError("The provided model has not been fully run. Call .fit_weights() and .score() first.")
+
+        # Create a deep copy to avoid modifying the original model
+        self.base_model = copy.deepcopy(model)
+        self.results = {}
+
+    def analyze(
+        self,
+        parent_node_id: str,
+        steps: int = 50
+    ) -> 'pd.DataFrame':
+        """
+        Analyzes the sensitivity of the final scores to changes in the weights
+        of the children of a specified parent node.
+
+        Args:
+            parent_node_id (str): The ID of the parent node whose children's weights
+                                  will be varied (e.g., 'COLOR Score' to vary C1, C2...).
+            steps (int): The number of steps to simulate for each weight change.
+
+        Returns:
+            A pandas DataFrame containing the results, ready for plotting.
+        """
+        import pandas as pd # Local import
+
+        parent_node = self.base_model._find_node(parent_node_id)
+        if not parent_node or parent_node.is_leaf:
+            raise ValueError(f"'{parent_node_id}' is not a valid parent node.")
+
+        children_to_vary = parent_node.children
+        original_local_weights = self.base_model.get_child_weights(parent_node_id, weight_type="local")
+
+        analysis_data = []
+
+        # Iterate through each criterion that we want to vary
+        for child_node in children_to_vary:
+            criterion_to_vary_id = child_node.id
+            print(f"\n--- Analyzing sensitivity with respect to: '{criterion_to_vary_id}' ---")
+
+            # Define the range of weights to test for this criterion
+            weight_range = np.linspace(0.01, 0.99, steps)
+
+            # Get the other "sibling" criteria
+            siblings = [c for c in children_to_vary if c.id != criterion_to_vary_id]
+
+            for new_weight in weight_range:
+                # Create a temporary model for this single simulation step
+                temp_model = copy.deepcopy(self.base_model)
+
+                # Set the new weight for the criterion being varied
+                node_to_change = temp_model._find_node(criterion_to_vary_id)
+                node_to_change.local_weight = temp_model.number_type.from_normalized(new_weight)
+
+                # Adjust the weights of the siblings proportionally
+                remaining_weight = 1.0 - new_weight
+                original_sibling_weight_sum = sum(original_local_weights[s.id] for s in siblings)
+
+                if original_sibling_weight_sum > 1e-9:
+                    for sibling in siblings:
+                        proportion = original_local_weights[sibling.id] / original_sibling_weight_sum
+                        adjusted_weight = proportion * remaining_weight
+                        sibling_node_to_change = temp_model._find_node(sibling.id)
+                        sibling_node_to_change.local_weight = temp_model.number_type.from_normalized(adjusted_weight)
+
+                # With weights adjusted, recalculate the entire model
+                temp_model._recalculate_global_weights()
+
+                for alt in temp_model.alternatives:
+                    alt.node_scores.clear()
+
+                # Now, the scoring method will work correctly
+                temp_model.score_alternatives_by_performance_ifwa()
+
+                # Store the results for this step
+                for alt in temp_model.alternatives:
+                    analysis_data.append({
+                        "varied_criterion": criterion_to_vary_id,
+                        "criterion_weight": new_weight,
+                        "alternative": alt.name,
+                        "final_score": alt.overall_score.defuzzify()
+                    })
+
+        self.results_df = pd.DataFrame(analysis_data)
+        return self.results_df
+
+    def plot(self):
+        """
+        Generates a plot of the sensitivity analysis results.
+        Requires the `analyze` method to have been run first.
+        """
+        if not hasattr(self, 'results_df') or self.results_df.empty:
+            raise RuntimeError("No analysis results to plot. Run .analyze() first.")
+
+        try:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            sns.set_theme(style="whitegrid")
+        except ImportError:
+            raise ImportError("Plotting requires matplotlib and seaborn. Install them with: pip install matplotlib seaborn")
+
+        varied_criteria = self.results_df['varied_criterion'].unique()
+        num_plots = len(varied_criteria)
+
+        fig, axes = plt.subplots(num_plots, 1, figsize=(10, 6 * num_plots), sharex=True)
+        if num_plots == 1: axes = [axes] # Ensure axes is always a list
+
+        for ax, criterion in zip(axes, varied_criteria):
+            subset_df = self.results_df[self.results_df['varied_criterion'] == criterion]
+
+            sns.lineplot(
+                data=subset_df,
+                x='criterion_weight',
+                y='final_score',
+                hue='alternative',
+                ax=ax,
+                marker='o',
+                markersize=4
+            )
+            ax.set_title(f"Sensitivity of Final Scores to Weight of '{criterion}'")
+            ax.set_ylabel("Final Company Score")
+            ax.legend(title="Company")
+
+        axes[-1].set_xlabel("Criterion Weight")
+        fig.tight_layout()
+        plt.show()
+
+
+
+class SensitivityAnalyzer:
+    """
+    Performs One-at-a-Time (OAT) sensitivity analysis on a fitted AHP model.
+    """
+    def __init__(self, pipeline: 'Workflow'):
+        if pipeline.model.root.global_weight is None:
+             raise RuntimeError("The provided pipeline's model has not been fully fitted. Run .fit_weights() and .score() on the pipeline first.")
+
+        # We store the entire pipeline to have access to its configuration and fitted model
+        self.base_pipeline = copy.deepcopy(pipeline)
+        self.results_df = pd.DataFrame()
+
+    def analyze(self, parent_node_id: str, steps: int = 30) -> pd.DataFrame:
+        """
+        Analyzes the sensitivity of the final scores to changes in the weights
+        of the children of a specified parent node.
+        """
+        parent_node = self.base_pipeline.model._find_node(parent_node_id)
+        if not parent_node or parent_node.is_leaf:
+            raise ValueError(f"'{parent_node_id}' is not a valid parent node.")
+
+        children_to_vary = parent_node.children
+        original_local_weights = self.base_pipeline.model.get_child_weights(parent_node_id, weight_type="local")
+
+        analysis_data = []
+
+        for child_node in children_to_vary:
+            criterion_to_vary_id = child_node.id
+            print(f"\n--- Analyzing sensitivity for: '{criterion_to_vary_id}' ---")
+
+            weight_range = np.linspace(0.01, 0.99, steps)
+            siblings = [c for c in children_to_vary if c.id != criterion_to_vary_id]
+
+            for new_weight in weight_range:
+                # 1. Create a pristine, deep copy for this iteration.
+                #    Our custom __deepcopy__ methods ensure it's a clean slate.
+                temp_model = copy.deepcopy(self.base_pipeline.model)
+
+                # 2. Apply the weight change
+                node_to_change = temp_model._find_node(criterion_to_vary_id)
+                node_to_change.local_weight = temp_model.number_type.from_normalized(new_weight)
+
+                remaining_weight = 1.0 - new_weight
+                original_sibling_weight_sum = sum(original_local_weights[s.id] for s in siblings)
+
+                if original_sibling_weight_sum > 1e-9:
+                    for sibling in siblings:
+                        proportion = original_local_weights[sibling.id] / original_sibling_weight_sum
+                        adjusted_weight = proportion * remaining_weight
+                        sibling_node_to_change = temp_model._find_node(sibling.id)
+                        sibling_node_to_change.local_weight = temp_model.number_type.from_normalized(adjusted_weight)
+
+                # 3. Recalculate global weights based on the new local weights
+                temp_model._recalculate_global_weights()
+
+                # 4. Score the alternatives. Because the alternatives in temp_model have
+                #    empty .node_scores caches, this will perform a full, fresh calculation.
+                temp_model.score_alternatives_by_performance()
+
+                # 5. Store results
+                for alt in temp_model.alternatives:
+                    analysis_data.append({
+                        "varied_criterion": criterion_to_vary_id,
+                        "criterion_weight": new_weight,
+                        "alternative": alt.name,
+                        "final_score": alt.overall_score.defuzzify()
+                    })
+
+        self.results_df = pd.DataFrame(analysis_data)
+        return self.results_df
+
+    def plot(self):
+        """
+        Generates a plot of the sensitivity analysis results.
+        Requires the `analyze` method to have been run first.
+        """
+        if not hasattr(self, 'results_df') or self.results_df.empty:
+            raise RuntimeError("No analysis results to plot. Run .analyze() first.")
+
+        try:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            sns.set_theme(style="whitegrid")
+        except ImportError:
+            raise ImportError("Plotting requires matplotlib and seaborn. Install them with: pip install matplotlib seaborn")
+
+        varied_criteria = self.results_df['varied_criterion'].unique()
+        num_plots = len(varied_criteria)
+
+        fig, axes = plt.subplots(num_plots, 1, figsize=(10, 6 * num_plots), sharex=True)
+        if num_plots == 1: axes = [axes] # Ensure axes is always a list
+
+        for ax, criterion in zip(axes, varied_criteria):
+            subset_df = self.results_df[self.results_df['varied_criterion'] == criterion]
+
+            sns.lineplot(
+                data=subset_df,
+                x='criterion_weight',
+                y='final_score',
+                hue='alternative',
+                ax=ax,
+                marker='o',
+                markersize=4
+            )
+            ax.set_title(f"Sensitivity of Final Scores to Weight of '{criterion}'")
+            ax.set_ylabel("Final Company Score")
+            ax.legend(title="Company")
+
+        axes[-1].set_xlabel("Criterion Weight")
+        fig.tight_layout()
+        plt.show()
