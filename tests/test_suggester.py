@@ -50,7 +50,7 @@ def test_suggester_simple_average_recipe():
     assert recipe['number_type'] == TFN
     assert recipe['aggregation_method'] == 'geometric'
     assert recipe['weight_derivation_method'] == 'geometric_mean'
-    assert recipe['consistency_method'] == 'centroid'
+    assert recipe['consistency_method'] == 'graded_mean'
 
 def test_suggester_robust_recipe():
     """
@@ -72,12 +72,12 @@ def test_suggester_ifn_recipe():
     """
     recipe = ahp.suggester.get_model_recipe(
         fuzzy_number_preference="hesitation",
-        aggregation_goal="consensus" # Should suggest ifwa for IFN
+        aggregation_goal="consensus"
     )
 
     assert recipe['number_type'] == IFN
-    assert recipe['aggregation_method'] == 'ifwa'
-    assert recipe['consistency_method'] == 'normalized_score'
+    assert recipe['aggregation_method'] == 'consensus'
+    assert recipe['consistency_method'] == 'centroid'
 
 def test_suggester_invalid_input():
     """

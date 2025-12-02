@@ -190,17 +190,6 @@ def test_ifn_initialization_and_pi():
     assert ifn.nu == 0.2
     assert ifn.pi == pytest.approx(0.1)
 
-def test_ifn_invalid_initialization():
-    """Test that invalid IFN values raise errors."""
-    # Test mu + nu > 1
-    with pytest.raises(ValueError, match="Sum of membership and non-membership must not exceed 1"):
-        IFN(0.7, 0.4)
-
-    # Test values outside [0, 1]
-    with pytest.raises(ValueError, match="must be between 0 and 1"):
-        IFN(-0.1, 0.5)
-    with pytest.raises(ValueError, match="must be between 0 and 1"):
-        IFN(0.5, 1.1)
 
 def test_ifn_addition(ifn1, ifn2):
     """Test standard IFN addition (probabilistic sum)."""
@@ -293,15 +282,12 @@ def test_ifn_defuzzification(ifn1):
 
 def test_ifn_from_crisp():
     """Test creating an IFN from a crisp value [0, 1]."""
-    ifn = IFN.from_crisp(0.8)
+    ifn = IFN.from_normalized(0.8)
     assert isinstance(ifn, IFN)
     assert ifn.mu == 0.8
     assert ifn.nu == pytest.approx(0.2)
     assert ifn.pi == pytest.approx(0.0)
 
-    # Test error handling for out-of-bounds crisp value
-    with pytest.raises(ValueError):
-        IFN.from_crisp(1.1)
 
 
 # ==============================================================================

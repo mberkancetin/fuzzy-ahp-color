@@ -98,22 +98,12 @@ class Consistency:
             m: The number of missing entries above the diagonal. If 0,
                the standard Saaty RI is used.
         """
-        if m > 0:
-            # Try to find the exact generalized RI value
-            val = configure_parameters.GENERALIZED_RI_VALUES.get((n, m))
-            if val is not None:
-                return val
-
-            # If not found, use the linear approximation formula as a fallback
-            if configure_parameters.USE_RI_APPROXIMATION_FALLBACK and n > 2:
-                ri_complete = configure_parameters.SAATY_RI_VALUES.get(n, configure_parameters.SAATY_RI_VALUES['default'])
-                # The formula from the paper is:
-                # RI_n,m ≈ (1 - 2m / ((n-1)(n-2))) * RI_n,0
-                denominator = (n - 1) * (n - 2)
-                if denominator > 0:
-                    return (1 - (2 * m) / denominator) * ri_complete
-
-        return configure_parameters.SAATY_RI_VALUES.get(n, configure_parameters.SAATY_RI_VALUES['default'])
+        if m > 0 and n > 2:
+            ri_complete = configure_parameters.SAATY_RI_VALUES.get(n, 1.6)
+            denominator = (n - 1) * (n - 2)
+            if denominator > 0:
+                return (1 - (2 * m) / denominator) * ri_complete
+        return configure_parameters.SAATY_RI_VALUES.get(n, 1.6)
 
     @CONSISTENCY_METHODS.register("saaty_cr")
     def calculate_saaty_cr(
@@ -148,41 +138,33 @@ class Consistency:
             The approximate consistency ratio (CR) as a float.
         """
         n = matrix.shape[0]
-        if n <= 2:
-            return 0.0
+        if n <= 2: return 0.0
 
-        first_element = matrix[0, 0]
-        if hasattr(first_element, 'defuzzify'):
-            crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix], dtype=float)
-        elif isinstance(first_element, (int, float, np.number)):
-            crisp_matrix = matrix.astype(float)
-        else:
-            raise TypeError(f"Unsupported matrix element type for consistency check: {type(first_element)}")
+        # Create a strictly reciprocal crisp matrix
+        crisp_matrix = np.eye(n)
 
-        if np.any(crisp_matrix <= 0):
-            return np.inf
-        # Calculate weights using numerically stable geometric mean
+        for i in range(n):
+            for j in range(i + 1, n):
+                val = matrix[i, j].defuzzify(method=consistency_method)
+                if val <= 1e-9: val = 1e-9
+
+                crisp_matrix[i, j] = val
+                crisp_matrix[j, i] = 1.0 / val
+
+        # Geometric mean weights
         log_matrix = np.log(crisp_matrix)
         row_geometric_means = np.exp(np.mean(log_matrix, axis=1))
         weights = row_geometric_means / np.sum(row_geometric_means)
 
-        # Calculate lambda_max
+        # Lambda max
         Aw = crisp_matrix @ weights
-
-        if np.any(weights == 0):
-            final_epsilon = epsilon if epsilon is not None else configure_parameters.LOG_EPSILON
-            weights = np.maximum(weights, final_epsilon)
-
-        lambda_max = np.mean(Aw / weights)
+        lambda_max = np.mean(Aw / np.maximum(weights, 1e-9))
 
         ci = (lambda_max - n) / (n - 1)
-        if ci < 0:
-            ci = 0.0
+        if ci < 0: ci = 0.0
 
         ri = Consistency._get_random_index(n, num_missing_pairs)
-
-        if ri <= 0:
-            return float('inf') if ci > 0 else 0.0 # Avoid division by zero
+        if ri <= 0: return float('inf') if ci > 0 else 0.0
 
         return ci / ri
 
@@ -200,26 +182,21 @@ class Consistency:
         n = matrix.shape[0]
         if n <= 2: return 0.0
 
-        first_element = matrix[0, 0]
-        if hasattr(first_element, 'defuzzify'):
-            crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix], dtype=float)
-        elif isinstance(first_element, (int, float, np.number)):
-            crisp_matrix = matrix.astype(float)
-        else:
-            raise TypeError(f"Unsupported matrix element type for consistency check: {type(first_element)}")
+        crisp_matrix = np.eye(n)
+        for i in range(n):
+            for j in range(i + 1, n):
+                val = matrix[i, j].defuzzify(method=consistency_method)
+                if val <= 1e-9: val = 1e-9
+                crisp_matrix[i, j] = val
+                crisp_matrix[j, i] = 1.0 / val
 
-
-        if np.any(crisp_matrix <= 0): return np.inf
-
-        # Calculate weights using the geometric mean method
         log_matrix = np.log(crisp_matrix)
         weights = np.exp(np.mean(log_matrix, axis=1))
         weights /= np.sum(weights)
 
-        # Calculate GCI using the corrected formula
         sum_of_squared_errors = 0
         for i in range(n):
-            for j in range(i + 1, n): # Iterate through upper triangle
+            for j in range(i + 1, n):
                 error = np.log(crisp_matrix[i, j]) - np.log(weights[i]) + np.log(weights[j])
                 sum_of_squared_errors += error**2
 
@@ -309,73 +286,41 @@ class Consistency:
             are a detailed dictionary of all calculated consistency metrics and the
             overall `is_consistent` status.
         """
-        final_cr_threshold = saaty_cr_threshold if saaty_cr_threshold is not None else configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
-
+        final_cr_threshold = saaty_cr_threshold or configure_parameters.DEFAULT_SAATY_CR_THRESHOLD
         results = {}
 
-        def _recursive_check(node: Node):
+        def _recursive_check(node):
+            # Check consistency for ANY node that has a matrix (Internal or Leaf)
+            if node.comparison_matrix is not None:
+                matrix = node.comparison_matrix
+                n = matrix.shape[0]
+                node_results = {"matrix_size": n}
+
+                for name, func in CONSISTENCY_METHODS.items():
+                    try:
+                        node_results[name] = func(matrix=matrix, consistency_method=consistency_method, num_missing_pairs=0)
+                    except Exception as e:
+                        node_results[name] = f"Error: {e}"
+
+                indices = required_indices or ["saaty_cr", "gci"]
+                consistent = True
+
+                if "saaty_cr" in indices:
+                    val = node_results.get("saaty_cr", 99)
+                    if isinstance(val, (float, np.floating)) and val > final_cr_threshold:
+                        consistent = False
+
+                if "gci" in indices:
+                    val = node_results.get("gci", 99)
+                    thresh = Consistency._get_gci_threshold(n)
+                    if isinstance(val, (float, np.floating)) and val > thresh:
+                        consistent = False
+
+                node_results["is_consistent"] = consistent
+                results[node.id] = node_results
+
             for child in node.children:
                 _recursive_check(child)
-
-            if node.comparison_matrix is None:
-                return
-
-            matrix = node.comparison_matrix
-            n = matrix.shape[0]
-            number_type = type(matrix[0, 0])
-
-            num_missing_pairs = np.count_nonzero(matrix == None) // 2
-
-            node_results = {
-                "matrix_size": n,
-                "num_missing_pairs": num_missing_pairs
-            }
-
-            context_args = {
-                "matrix": matrix,
-                "number_type": number_type,
-                "consistency_method": consistency_method,
-                "num_missing_pairs": num_missing_pairs,
-                "model": model
-            }
-
-            for name, func in CONSISTENCY_METHODS.items():
-                try:
-                    node_results[name] = func(**context_args)
-                except Exception as e:
-                    node_results[name] = f"Error: {e}"
-
-            indices_to_check = required_indices
-            if indices_to_check is None:
-                indices_to_check = []
-                if "saaty_cr" in CONSISTENCY_METHODS: indices_to_check.append("saaty_cr")
-                if "gci" in CONSISTENCY_METHODS: indices_to_check.append("gci")
-
-            all_required_passed = True
-
-            for index_name in indices_to_check:
-                value = node_results.get(index_name)
-                if isinstance(value, str) and value.lower().startswith(('error', 'failed')):
-                    all_required_passed = False
-                    break
-
-            if all_required_passed:
-                if "saaty_cr" in indices_to_check:
-                    saaty_cr_val = node_results.get("saaty_cr")
-                    if not (isinstance(saaty_cr_val, (float, np.floating)) and saaty_cr_val <= final_cr_threshold):
-                        all_required_passed = False
-
-                if "gci" in indices_to_check:
-                    gci_val = node_results.get("gci")
-                    gci_threshold = Consistency._get_gci_threshold(n)
-                    if not (isinstance(gci_val, (float, np.floating)) and gci_val <= gci_threshold):
-                        all_required_passed = False
-
-            node_results["is_consistent"] = all_required_passed
-            node_results["saaty_cr_threshold"] = final_cr_threshold
-            node_results["gci_threshold"] = Consistency._get_gci_threshold(n) # Report for context
-
-            results[node.id] = node_results
 
         _recursive_check(model.root)
         return results
@@ -456,77 +401,50 @@ class Consistency:
         Provides a ranked list of judgments to change to improve consistency.
         """
         node = model._find_node(inconsistent_node_id)
-        if node is None or node.comparison_matrix is None:
-            return {'error': f"Node '{inconsistent_node_id}' not found or has no matrix."}
+        if not node or node.comparison_matrix is None: return {'error': 'Node not found or has no matrix'}
 
         matrix = node.comparison_matrix
-        crisp_matrix = np.array([[c.defuzzify(method=consistency_method) for c in row] for row in matrix], dtype=float)
-        n = crisp_matrix.shape[0]
+        n = matrix.shape[0]
 
-        first_element = matrix[0, 0]
-        if hasattr(first_element, 'defuzzify'):
-            crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix], dtype=float)
-        elif isinstance(first_element, (int, float, np.number)):
-            crisp_matrix = matrix.astype(float)
-        else:
-            raise TypeError(f"Unsupported matrix element type for consistency check: {type(first_element)}")
-
-
-        sanitized_matrix = np.maximum(crisp_matrix, 1e-9)
+        crisp = np.eye(n)
+        for i in range(n):
+            for j in range(i+1, n):
+                val = matrix[i, j].defuzzify(method=consistency_method)
+                if val <= 1e-9: val = 1e-9
+                crisp[i, j] = val
+                crisp[j, i] = 1.0/val
 
         try:
-            log_matrix = np.log(sanitized_matrix)
-            weights = np.exp(np.mean(log_matrix, axis=1))
-
-            weight_sum = np.sum(weights)
-            if weight_sum < 1e-9:
-                raise ValueError("Sum of weights is near zero.")
-
-            weights /= weight_sum
+            log_m = np.log(crisp)
+            w = np.exp(np.mean(log_m, axis=1))
+            w /= np.sum(w)
         except Exception as e:
-            return {'error': f"Failed to calculate weights for recommendation. Error: {e}"}
+            return {'error': f"Weight calc failed: {e}"}
 
         all_errors = []
         for i in range(n):
-            for j in range(i + 1, n):
-                if weights[j] < 1e-9:
-                    continue
-
-                expected_val = weights[i] / weights[j]
-                actual_val = crisp_matrix[i, j]
-
-                if recommendation_method == "relative_error":
-                    if abs(expected_val) > 1e-9:
-                        error = abs(actual_val - expected_val) / expected_val
-                    else:
-                        error = abs(actual_val - expected_val)
-                else:
-                    # Calculate the ratio of the actual value to the expected value
-                    # This is the core of the geometric consistency error (GCI is based on log of this ratio)
-                    # A value of 1 means perfect consistency for this pair.
-                    ratio_error = actual_val / expected_val
-
-                    # The magnitude of the log of the ratio is a more robust measure of inconsistency
-                    # for ratio-scale data like AHP.
-                    error_magnitude = abs(np.log(ratio_error))
-
-                    # We use the error_magnitude to rank the pairs.
-                    error = error_magnitude
-
-
+            for j in range(i+1, n):
+                expected = w[i] / w[j]
+                actual = crisp[i, j]
+                error = abs(np.log(actual / expected))
                 all_errors.append({
                     "pair": (i, j),
                     "error": error,
-                    "current_value": actual_val,
-                    "suggested_value": expected_val,
+                    "current_value": actual,
+                    "suggested_value": expected
                 })
 
-        if not all_errors:
-            return {'error': "Could not calculate inconsistency errors for any pair."}
+        # Deterministic sort
+        all_errors.sort(key=lambda x: (-x['error'], x['pair']))
 
-        all_errors.sort(key=lambda x: x['error'], reverse=True)
+        children_names = [child.id for child in node.children]
+
+        # If node is a leaf (Alternative Matrix), names are Alternatives, not Children
+        if not children_names and model.alternatives:
+             # Assuming standard order of alternatives in matrix
+             children_names = [alt.name for alt in model.alternatives]
 
         return {
             "revisions": all_errors,
-            "children_names": [child.id for child in node.children]
+            "children_names": children_names
         }

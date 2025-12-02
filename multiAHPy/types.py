@@ -530,13 +530,12 @@ class IFN:
 
     def __init__(self, mu: float, nu: float, ifn_scale_name: str = None):
         from .config import configure_parameters
-        mu, nu = float(mu), float(nu)
-        if not (0 <= mu <= 1 and 0 <= nu <= 1):
-            raise ValueError("Membership (mu) and non-membership (nu) must be between 0 and 1.")
-        if round(mu + nu, 9) > 1.0:
-            raise ValueError(f"Sum of membership and non-membership must not exceed 1, but mu+nu={mu+nu}.")
-        self.mu = mu
-        self.nu = nu
+        self.mu = float(mu)
+        self.nu = float(nu)
+        if self.mu + self.nu > 1.0 + 1e-9:
+            raise ValueError(f"Invalid IFN: mu({mu}) + nu({nu}) > 1")
+        self.pi = 1.0 - self.mu - self.nu
+
         self.pi = 1.0 - self.mu - self.nu
         self.ifn_scale_name = ifn_scale_name
         self.ifn_scale = None
@@ -563,16 +562,16 @@ class IFN:
     def __add__(self, other: IFN) -> IFN:
         if not isinstance(other, IFN): return NotImplemented
         return IFN(
-            mu = self.mu + other.mu - self.mu * other.mu,
-            nu = self.nu * other.nu
-        )
+            self.mu + other.mu - self.mu * other.mu,
+            self.nu * other.nu
+            )
 
     def __mul__(self, other: IFN) -> IFN:
         if not isinstance(other, IFN): return NotImplemented
         return IFN(
-            mu = self.mu * other.mu,
-            nu = self.nu + other.nu - self.nu * other.nu
-        )
+            self.mu * other.mu,
+            self.nu + other.nu - self.nu * other.nu
+            )
 
     # Subtraction and Division are not standardly defined for IFS in a way that
     # is useful for AHP. They are often context-specific or not used at all.
@@ -627,25 +626,33 @@ class IFN:
         if not (0 <= exponent):
             raise ValueError("Exponent for IFN must be non-negative.")
         return IFN(
-            mu = self.mu ** exponent,
-            nu = 1 - (1 - self.nu) ** exponent
-        )
+            self.mu ** exponent,
+            1 - (1 - self.nu) ** exponent
+            )
 
     def __pow__(self, exponent: float) -> IFN:
         return self.power(exponent)
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, IFN):
-            return self.mu == other.mu and self.nu == other.nu
-        return False
+        if not isinstance(other, IFN): return NotImplemented
+        return np.isclose(self.mu, other.mu) and np.isclose(self.nu, other.nu)
 
     def __lt__(self, other: IFN) -> bool:
         if not isinstance(other, IFN): return NotImplemented
-        if self.defuzzify(method="score") < other.defuzzify(method="score"):
-            return True
-        elif self.defuzzify(method="score") == other.defuzzify(method="score"):
-            return self.defuzzify(method="accuracy")  < other.defuzzify(method="accuracy")
-        return False
+
+        # 1. Compare Scores (S = mu - nu)
+        s1 = self.defuzzify(method='score')
+        s2 = other.defuzzify(method='score')
+
+        if not np.isclose(s1, s2):
+            return s1 < s2
+
+        # 2. Tie-breaker: Compare Accuracy (H = mu + nu)
+        # Higher accuracy is "better" (greater), so lower accuracy is "less than"
+        a1 = self.defuzzify(method='accuracy')
+        a2 = other.defuzzify(method='accuracy')
+
+        return a1 < a2
 
     def inverse(self) -> IFN:
         """The inverse (or complement) of an IFN is (ν, μ)."""
@@ -676,7 +683,7 @@ class IFN:
         return IFN(mu=value, nu=1.0 - value)
 
     @staticmethod
-    def from_saaty(value: float) -> IFN:
+    def from_saaty_experimental(value: float) -> IFN:
         """
         Creates an IFN from a crisp Saaty-scale value (e.g., 1-9 and reciprocals).
 
@@ -719,6 +726,51 @@ class IFN:
             return IFN(mu=nu, nu=mu)  # Return the inverse
         else:
             return IFN(mu=mu, nu=nu)
+
+    @staticmethod
+    def from_saaty(value: float) -> IFN:
+        """
+        Converts a Saaty scale value to an IFN using academically cited scales.
+        """
+        from .config import configure_parameters
+        scale = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS["buyukozkan_9_level"]
+
+        # 1. Handle Reciprocals (Values < 1)
+        if value < 1.0 - 1e-9:
+            # The reciprocal of an IFN A is (nu, mu)
+            # We convert the whole number part (1/val) and then invert it
+            return IFN.from_saaty(round((1.0 / value), 1)).inverse()
+
+        # 2. Handle Exact Integers (Direct Lookup)
+        # Round to nearest to catch floating point noise (e.g. 3.0000001)
+        val_round = round(value, 2)
+
+        if val_round == int(val_round):
+            mu, nu = scale(int(val_round))
+            return IFN(mu, nu)
+
+        # 3. Handle Aggregated/Continuous Values (Interpolation)
+        # If we have a value like 3.5 (from a geometric mean), we interpolate
+        # between the defined scale points. This is an engineering necessity.
+
+        # Clamp to 1-9 range
+        v = np.clip(value, 1, 9)
+        lower = int(np.floor(v))
+        upper = int(np.ceil(v))
+
+        if lower == upper:
+            mu, nu = scale(lower)
+            return IFN(mu, nu)
+
+        # Linear Interpolation between the academic points
+        ratio = v - lower
+        mu_l, nu_l = scale(lower)
+        mu_u, nu_u = scale(upper)
+
+        mu = mu_l + ratio * (mu_u - mu_l)
+        nu = nu_l + ratio * (nu_u - nu_l)
+
+        return IFN(mu, nu)
 
     @staticmethod
     def from_saaty_with_consistency(
@@ -772,8 +824,6 @@ class IFN:
         Creates an IFN from a normalized value (e.g., weight or performance score)
         in the [0, 1] range, assuming no hesitation.
         """
-        if not (0 <= value <= 1):
-            raise ValueError("Normalized value for IFN conversion must be between 0 and 1.")
         return IFN(mu=value, nu=1.0 - value)
 
     @staticmethod
@@ -829,10 +879,8 @@ class IFN:
             method: 'centroid', 'score', 'entropy', 'accuracy', 'value'.
         """
         func = self.__class__._defuzzify_methods.get(method)
-        if func is None:
-            available = list(self.__class__._defuzzify_methods.keys())
-            raise ValueError(f"Method '{method}' not implemented for IFN. Available: {available}")
-        return func(self, **kwargs)
+        if func: return func(self, **kwargs)
+        raise ValueError(f"Method {method} not found")
 
     @classmethod
     def get_available_defuzzify_methods(cls) -> List[str]:

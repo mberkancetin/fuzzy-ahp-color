@@ -544,81 +544,61 @@ def generate_matrix_report(
     from .weight_derivation import derive_weights
     from .consistency import Consistency
 
-    matrix = node_with_matrix.comparison_matrix
-    if matrix is None:
-        return f"--- No comparison matrix found for node '{node_with_matrix.id}' ---\n"
+    node = node_with_matrix
+    matrix = node.comparison_matrix
+    if matrix is None: return ""
 
-    items = [child.id for child in node_with_matrix.children]
+    # If it's a leaf node, the items are Alternatives, otherwise Children
+    if node.is_leaf and model.alternatives:
+        items = [alt.name for alt in model.alternatives]
+    else:
+        items = [child.id for child in node.children]
+
     n = len(items)
-
-    # --- Calculations ---
-    results = derive_weights(matrix, model.number_type, derivation_method)
+    results = derive_weights(matrix, model.number_type, derivation_method, consistency_method=consistency_method)
     crisp_weights = results["crisp_weights"]
 
-    # Get consistency metrics
-    cr = Consistency.calculate_saaty_cr(matrix, consistency_method=consistency_method)
-    # To get CI and RI, we can re-calculate parts of the CR logic
-    ci = 0.0
-    ri = 0.0
+    # Consistency
+    saaty_cr = Consistency.calculate_saaty_cr(matrix, consistency_method=consistency_method)
+
+    # Local CI Calc for report
+    ci, ri = 0.0, 0.0
     if n > 2:
-        crisp_matrix = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
+        crisp_mat = np.eye(n)
+        for r in range(n):
+            for c in range(r+1, n):
+                v = matrix[r,c].defuzzify(method=consistency_method)
+                if v<=1e-9: v=1e-9
+                crisp_mat[r,c]=v
+                crisp_mat[c,r]=1.0/v
         try:
-            eigenvalues, _ = np.linalg.eig(crisp_matrix)
-            lambda_max = np.max(np.real(eigenvalues))
-            ci = (lambda_max - n) / (n - 1)
-        except np.linalg.LinAlgError:
-            ci = -1 # Indicate failure
+            evals = np.linalg.eigvals(crisp_mat)
+            lmax = np.max(np.real(evals))
+            ci = max(0.0, (lmax - n)/(n-1))
+        except: ci = -1.0
         ri = Consistency._get_random_index(n)
 
-    # --- Formatting ---
     report_lines = []
-
-    # 1. Header and Matrix
-    col_width = 25  # Width for each matrix column
+    col_width = 25
     header = f"{'':<10}" + "".join([f"{item:<{col_width}}" for item in items])
     report_lines.append(header)
     report_lines.append("-" * len(header))
 
-    for i, item_name in enumerate(items):
-        row_str = f"{item_name:<10}"
+    for i, item in enumerate(items):
+        row_str = f"{item:<10}"
         for j in range(n):
             cell = matrix[i, j]
-            # Format the cell based on its type
-            if hasattr(cell, 'l'): # TFN or similar
-                 cell_str = f"({cell.l:.3f}, {cell.m:.3f}, {cell.u:.3f})"
-            elif hasattr(cell, 'value'): # Crisp
-                 cell_str = f"{cell.value:.3f}"
-            else:
-                 cell_str = str(cell)
-            row_str += f"{cell_str:<{col_width}}"
+            if hasattr(cell, 'l'): c_str = f"({cell.l:.3f}, {cell.m:.3f}, {cell.u:.3f})"
+            elif hasattr(cell, 'mu'): c_str = f"(μ:{cell.mu:.3f}, ν:{cell.nu:.3f})"
+            elif hasattr(cell, 'value'): c_str = f"{cell.value:.3f}"
+            else: c_str = str(cell)
+            row_str += f"{c_str:<{col_width}}"
         report_lines.append(row_str)
 
     report_lines.append("-" * len(header))
-
-    # 2. Weights
-    weights_str = ", ".join([f"{w:.4f}" for w in crisp_weights])
-    report_lines.append(f"w_{node_with_matrix.id} = {{ {weights_str} }}")
-
-    # 3. Degrees of Probability (Specific to Extent Analysis)
-    min_degrees = results.get("min_degrees")
-    if min_degrees is not None:
-        # Degrees of Probability Min Values Normalized are the final crisp weights
-        report_lines.append(f"Degrees of Probability Min Values Normalized: [{weights_str}]")
-
-    V_matrix = results.get("possibility_matrix")
-    if V_matrix is not None:
-        report_lines.append("\n--- Degrees of Probability Matrix (V) ---\n")
-        v_header = f"{'':<10}" + "".join([f"{item:<10}" for item in items])
-        report_lines.append(v_header)
-        report_lines.append("-" * len(v_header))
-        for i, item_name in enumerate(items):
-            row_str = f"{item_name:<10}"
-            for j in range(n):
-                row_str += f"{V_matrix[i, j]:<10.4f}"
-            report_lines.append(row_str)
-
-    # 4. Consistency Metrics
-    report_lines.append(f"CR, CI, RI: ({cr:.6f}, {ci:.6f}, {ri:.2f})")
+    w_str = ", ".join([f"{w:.4f}" for w in crisp_weights])
+    report_lines.append(f"Weights ({node.id}) = {{ {w_str} }}")
+    report_lines.append(f"CR: {saaty_cr:.4f}, CI: {ci:.4f}, RI: {ri:.2f}")
 
     return "\n".join(report_lines)
 
@@ -646,29 +626,21 @@ def generate_full_report(
     report_parts.append(title)
     report_parts.append("=" * len(title) + "\n")
 
-    def _traverse_and_report(node: Node):
-        if not node.is_leaf and node.comparison_matrix is not None:
-            # Add a title for this section
-            report_parts.append(f"\n--- Comparisons for Children of: {node.id} ---\n")
-            # Generate the report for this node's matrix
+    def _traverse(node):
+        # Allow leaf nodes if they have matrices (Alternative comparisons)
+        if node.comparison_matrix is not None:
+            report_parts.append(f"\n--- Matrix for Node: {node.id} ---")
             report_parts.append(generate_matrix_report(node, model, derivation_method, consistency_method))
-            report_parts.append("\n")
 
-        for child in node.children:
-            _traverse_and_report(child)
+        for child in node.children: _traverse(child)
 
-    # Start the recursive report generation from the root
-    _traverse_and_report(model.root)
-
+    _traverse(model.root)
     full_report = "\n".join(report_parts)
 
     if filename:
         try:
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(full_report)
-            print(f"✅ Full analysis report saved to: {filename}")
-        except Exception as e:
-            print(f"❌ Error saving report file: {e}")
+            with open(filename, 'w', encoding='utf-8') as f: f.write(full_report)
+        except Exception as e: print(e)
 
     return full_report
 
@@ -710,7 +682,51 @@ def export_full_report(
         raise ValueError(f"Unsupported output_format: '{output_format}'. "
                          "Choose from 'excel', 'csv', or 'gsheet'.")
 
-def _create_report_dataframe(
+def _create_report_dataframe(node, model, derivation_method, consistency_method):
+    from .weight_derivation import derive_weights
+    from .consistency import Consistency
+
+    matrix = node.comparison_matrix
+    if node.is_leaf and model.alternatives:
+        items = [alt.name for alt in model.alternatives]
+    else:
+        items = [child.id for child in node.children]
+
+    n = len(items)
+    res = derive_weights(matrix, model.number_type, derivation_method, consistency_method=consistency_method)
+
+    saaty_cr = Consistency.calculate_saaty_cr(matrix, consistency_method=consistency_method)
+
+    # Data rows
+    data = []
+    for i in range(n):
+        row = {}
+        for j in range(n):
+            cell = matrix[i, j]
+            if hasattr(cell, 'l'): s = f"{cell.l:.2f},{cell.m:.2f},{cell.u:.2f}"
+            elif hasattr(cell, 'mu'): s = f"μ{cell.mu:.2f},ν{cell.nu:.2f}"
+            elif hasattr(cell, 'value'): s = f"{cell.value:.2f}"
+            else: s = str(cell)
+            row[items[j]] = s
+        data.append(row)
+
+    df = pd.DataFrame(data, index=items)
+
+    # Weights row
+    w_row = pd.DataFrame({items[i]: f"{res['crisp_weights'][i]:.4f}" for i in range(n)}, index=["Weights"])
+    df = pd.concat([df, pd.DataFrame([['']*n], index=[' '], columns=items), w_row])
+
+    # Stats
+    stats = pd.DataFrame({'Value': [f"{saaty_cr:.4f}"]}, index=['Saaty CR'])
+    # Add empty columns to match
+    stats = pd.concat([stats, pd.DataFrame('', index=stats.index, columns=items[1:])], axis=1)
+    # Fix column name match for concat
+    stats.columns = items
+
+    df = pd.concat([df, stats])
+    return df, None
+
+def _create_report_dataframe_retired(
     node_with_matrix: Node,
     model: Hierarchy,
     derivation_method: str,
@@ -745,13 +761,28 @@ def _create_report_dataframe(
 
     ci, ri, saaty_cr = 0.0, 0.0, 0.0
     if n > 2:
+        # 1. Use the centralized robust logic from Consistency class
         saaty_cr = Consistency.calculate_saaty_cr(matrix, consistency_method=consistency_method)
-        crisp_matrix_for_eig = np.array([[cell.defuzzify(method=consistency_method) for cell in row] for row in matrix])
+
+        # 2. Re-calculate CI/RI locally strictly for display purposes
+        # using the SAME robust matrix construction as Consistency.py
+        crisp_matrix_for_eig = np.eye(n) # Force 1.0 diagonal
+        for r in range(n):
+            for c in range(r + 1, n):
+                val = matrix[r, c].defuzzify(method=consistency_method)
+                if val <= 1e-9: val = 1e-9
+                crisp_matrix_for_eig[r, c] = val
+                crisp_matrix_for_eig[c, r] = 1.0 / val
+
         try:
-            lambda_max = np.max(np.real(np.linalg.eig(crisp_matrix_for_eig)[0]))
+            # Check eigenvalues using the correct crisp matrix
+            eigenvalues = np.linalg.eigvals(crisp_matrix_for_eig)
+            lambda_max = np.max(np.real(eigenvalues))
             ci = (lambda_max - n) / (n - 1)
+            if ci < 0: ci = 0.0 # Clamp negative zero
         except np.linalg.LinAlgError:
             ci = -1.0
+
         ri = Consistency._get_random_index(n)
 
     # --- Step 2: Build the report content as strings ---
@@ -897,40 +928,31 @@ def format_group_judgments_as_table(
     df = pd.DataFrame(table_data, index=pd.Index(pair_labels, name="Pairs"))
     return df
 
+def export_full_report(model, target, output_format='excel', spreadsheet_id=None, derivation_method='geometric_mean', consistency_method='centroid'):
+    _check_pandas_availability()
+    if output_format == 'excel': _export_to_excel(model, target, derivation_method, consistency_method)
+    elif output_format == 'csv': _export_to_csv(model, target, derivation_method, consistency_method)
+    elif output_format == 'gsheets': _export_to_gsheet(model, target, derivation_method, consistency_method)
 
 def _export_to_excel(model, filename, derivation_method, consistency_method):
-    if not filename.endswith('.xlsx'):
-        filename += '.xlsx'
-    try:
-        with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-            def _traverse_and_write(node: Node):
-                if not node.is_leaf and node.comparison_matrix is not None:
-                    df_report, df_matrices = _create_report_dataframe(node, model, derivation_method, consistency_method)
-                    sheet_name = node.id.replace(':', '').replace('\\', '').replace('/', '')[:31]
-                    df_report.to_excel(writer, sheet_name=sheet_name)
-                for child in node.children:
-                    _traverse_and_write(child)
-            _traverse_and_write(model.root)
-        print(f"✅ Excel report successfully saved to: {filename}")
-    except Exception as e:
-        print(f"❌ Error saving Excel report: {e}")
+    if not filename.endswith('.xlsx'): filename += '.xlsx'
+    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+        def _write(node):
+            if node.comparison_matrix is not None:
+                df, _ = _create_report_dataframe(node, model, derivation_method, consistency_method)
+                sheet = node.id[:31].replace(':', '')
+                df.to_excel(writer, sheet_name=sheet)
+            for c in node.children: _write(c)
+        _write(model.root)
 
 def _export_to_csv(model, filename, derivation_method, consistency_method):
-    base_filename = filename[:-4] if filename.endswith('.csv') else filename
-    try:
-        def _traverse_and_write_csv(node: Node):
-            if not node.is_leaf and node.comparison_matrix is not None:
-                df_report, df_matrices = _create_report_dataframe(node, model, derivation_method, consistency_method)
-                csv_filename = f"{base_filename}_matrix_{node.id}.csv"
-                df_report.to_csv(csv_filename)
-                print(f"  - Saved {csv_filename}")
-            for child in node.children:
-                _traverse_and_write_csv(child)
-        print(f"✅ Exporting CSV reports with base name '{base_filename}':")
-        _traverse_and_write_csv(model.root)
-        print("CSV export complete.")
-    except Exception as e:
-        print(f"❌ Error saving CSV reports: {e}")
+    if base_name.endswith('.csv'): base_name = base_name[:-4]
+    def _write(node):
+        if node.comparison_matrix is not None:
+            df, _ = _create_report_dataframe(node, model, derivation_method, consistency_method)
+            df.to_csv(f"{base_name}_{node.id}.csv")
+        for c in node.children: _write(c)
+    _write(model.root)
 
 def _export_to_gsheet(
     model: Hierarchy,

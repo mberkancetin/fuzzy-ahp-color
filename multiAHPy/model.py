@@ -48,20 +48,18 @@ class Node(Generic[Number]):
         return (f"Node(id='{self.id}', local_weight={local_w_str}, "
                 f"global_weight={global_w_str}, children={len(self.children)})")
 
-    def add_child(self, child_node: Node[Number]):
+    def add_child(self, child: Node[Number]):
         """
         Adds a child node and establishes the parent-child link.
         """
-        child_node.parent = self
-        self.children.append(child_node)
-        if self.model:
-            child_node._set_model_reference(self.model)
+        child.parent = self
+        self.children.append(child)
+        if self.model: child._set_model_reference(self.model)
 
     def _set_model_reference(self, model: 'Hierarchy[Number]'):
         """Recursively sets the model reference for this node and all its children."""
         self.model = model
-        for child in self.children:
-            child._set_model_reference(model)
+        for c in self.children: c._set_model_reference(model)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes the Node and its children to a JSON-compatible dictionary."""
@@ -92,53 +90,15 @@ class Node(Generic[Number]):
         """
         A node is a leaf if it has no children.
         """
-        return not self.children
-
-    def calculate_global_weights(self):
-        """
-        Recursively calculates the global weights for this node's children.
-        Assumes its own global_weight has already been set.
-        """
-        if self.global_weight.__class__.__name__ == 'IFN':
-            parent_global_score = self.global_weight.defuzzify(method='centroid')
-            parent_global_pi = self.global_weight.pi
-
-            for child in self.children:
-                if child.local_weight is None:
-                    raise ValueError(f"Cannot calculate global weight for '{child.id}', local weight is missing.")
-
-                # Get the child's local score and hesitation
-                child_local_score = child.local_weight.defuzzify(method='centroid')
-                child_local_pi = child.local_weight.pi
-
-                # 1. The final global score is the product of the crisp scores.
-                child_global_score = parent_global_score * child_local_score
-
-                # 2. The final global hesitation is a combination of parent and child hesitation.
-                #    A common and defensible model is that uncertainty increases. The union (1 - (1-p1)*(1-p2))
-                #    is a good model for combining probabilities.
-                child_global_pi = 1 - (1 - parent_global_pi) * (1 - child_local_pi)
-
-                # 3. Reconstruct the final global weight IFN from its new score and hesitation.
-                #    We use the robust constructor that prevents mu=0.
-                child.global_weight = self.global_weight.__class__.from_score_and_hesitation(
-                    child_global_score, child_global_pi
-                )
-
-                # 4. Recurse down the tree
-                if not child.is_leaf:
-                    child.calculate_global_weights()
+        return len(self.children) == 0
 
     def get_all_leaf_nodes(self) -> List[Node[Number]]:
         """
         Recursively finds all leaf nodes under this node.
         """
-        if self.is_leaf:
-            return [self]
-
+        if self.is_leaf: return [self]
         leaves = []
-        for child in self.children:
-            leaves.extend(child.get_all_leaf_nodes())
+        for c in self.children: leaves.extend(c.get_all_leaf_nodes())
         return leaves
 
     def get_all_nodes(self) -> List[Node]:
@@ -147,6 +107,21 @@ class Node(Generic[Number]):
         for child in self.children:
             nodes.extend(child.get_all_nodes())
         return nodes
+
+    def calculate_global_weights(self):
+        """
+        Recursively calculates the global weights for this node's children.
+        Assumes its own global_weight has already been set.
+        """
+        # Recursive calculation
+        # If using IFN, be careful with multiplication.
+        # Often it is better to propagate crisp weights if fuzzy multiplication explodes uncertainty.
+        if self.global_weight is None: return
+
+        for child in self.children:
+            if child.local_weight:
+                child.global_weight = self.global_weight * child.local_weight
+                child.calculate_global_weights()
 
     def judgments_to_table(
         self,
@@ -432,14 +407,11 @@ class Hierarchy(Generic[Number]):
 
     def _find_node(self, node_id: str, start_node: Optional[Node[Number]] = None) -> Optional[Node[Number]]:
         """Helper to find a node by its ID anywhere in the tree."""
-        if start_node is None:
-            start_node = self.root
-        if start_node.id == node_id:
-            return start_node
-        for child in start_node.children:
-            found = self._find_node(node_id, child)
-            if found:
-                return found
+        start = start_node or self.root
+        if start.id == node_id: return start
+        for c in start.children:
+            found = self._find_node(node_id, c)
+            if found: return found
         return None
 
     def get_all_nodes(self):
@@ -460,23 +432,7 @@ class Hierarchy(Generic[Number]):
         if len(parent_node.children) != matrix.shape[0]:
             raise ValueError(f"Matrix dimensions ({matrix.shape[0]}) do not match the number of children ({len(parent_node.children)}) for parent '{parent_node_id}'.")
 
-        n = matrix.shape[0]
-        converted_matrix = np.empty((n, n), dtype=object)
-
-        target_type = self.number_type
-
-        for i in range(n):
-            for j in range(n):
-                cell = matrix[i, j]
-                if isinstance(cell, target_type):
-                    converted_matrix[i, j] = cell
-                else:
-                    try:
-                        converted_matrix[i, j] = target_type.from_saaty(cell)
-                    except Exception as e:
-                        raise TypeError(f"Could not convert cell at ({i},{j}) with value '{cell}' to type '{target_type.__name__}'. Error: {e}")
-
-        parent_node.comparison_matrix = converted_matrix
+        parent_node.comparison_matrix = matrix
 
     def set_alternative_matrix(self, criterion_id: str, matrix: np.ndarray):
         """
@@ -517,16 +473,25 @@ class Hierarchy(Generic[Number]):
         """
         Calculates all local and global weights for the entire hierarchy.
         """
-        print("\n--- Calculating Local Weights ---")
-        self._calculate_local_weights_recursive(self.root, method)
+        # Recursive derivation
+        def _calc(node):
+            if not node.is_leaf and node.comparison_matrix is not None:
+                # Use 'normalized_score' for IFN consistency checks by default to ensure positive weights
+                c_method = 'normalized_score' if self.number_type.__name__ == 'IFN' else 'centroid'
 
-        print("\n--- Calculating Global Weights ---")
-        # Set the root's global weight to the correct type of "one"
+                res = derive_weights(node.comparison_matrix, self.number_type, method, consistency_method=c_method)
+
+                weights = res['weights']
+                for i, child in enumerate(node.children):
+                    child.local_weight = weights[i]
+
+            for c in node.children: _calc(c)
+
+        _calc(self.root)
+
+        # Set root global weight
         self.root.global_weight = self.number_type.multiplicative_identity()
-
         self.root.calculate_global_weights()
-        print("Global weights calculation complete.")
-        self.last_used_derivation_method = method
 
     def _calculate_local_weights_recursive(self, node: Node[Number], method: str):
         """
@@ -662,23 +627,38 @@ class Hierarchy(Generic[Number]):
         if self.root.global_weight is None:
             raise RuntimeError("Weights have not been calculated yet. Call `calculate_weights()` first.")
 
+        # For IFN, override default centroid with 'normalized_score' if not specified, to prevent negative weights
+        if self.number_type.__name__ == 'IFN' and consistency_method == 'centroid':
+            consistency_method = 'normalized_score'
+
         leaf_nodes = self.root.get_all_leaf_nodes()
 
-        if not as_dict:
-            return leaf_nodes
+        leaves = self.root.get_all_leaf_nodes()
 
-        defuzz_method = consistency_method
-        weights_dict = {}
-        for leaf in leaf_nodes:
-            if leaf.global_weight is None:
-                raise RuntimeError(f"Global weight for leaf node '{leaf.id}' is missing.")
+        if not as_dict: return leaves
 
+        raw_vals = []
+        keys = []
+
+        for leaf in leaves:
+            keys.append(leaf.id)
             if defuzzify:
-                weights_dict[leaf.id] = leaf.global_weight.defuzzify(method=defuzz_method)
+                val = leaf.global_weight.defuzzify(method=consistency_method)
+                raw_vals.append(max(0, val)) # Clamp
             else:
-                weights_dict[leaf.id] = leaf.global_weight
+                raw_vals.append(leaf.global_weight)
 
-        return weights_dict
+        if not defuzzify:
+            return dict(zip(keys, raw_vals))
+
+        # Normalize
+        total = sum(raw_vals)
+        if total > 0:
+            norm_vals = [v / total for v in raw_vals]
+        else:
+            norm_vals = [1.0/len(raw_vals)] * len(raw_vals)
+
+        return dict(zip(keys, norm_vals))
 
     def get_child_weights(
         self,
@@ -904,6 +884,8 @@ class Hierarchy(Generic[Number]):
         Returns:
             A dictionary with detailed consistency results for each matrix in the model.
         """
+        if self.number_type.__name__ == 'IFN' and 'consistency_method' not in kwargs:
+             kwargs['consistency_method'] = 'normalized_score'
         return Consistency.check_model_consistency(self, **kwargs)
 
     def display(self):

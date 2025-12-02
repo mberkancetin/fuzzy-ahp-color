@@ -58,11 +58,98 @@ class DataSanitizer:
         print("--- Sanitization Complete ---")
         return sanitized_matrices, change_log
 
+def _refuzzify_matrix(crisp_matrix: np.ndarray, target_number_type: type, scale: str) -> np.ndarray:
+    """
+    Helper to convert a consistent crisp matrix back to fuzzy.
+    CRITICAL: Uses from_normalized to ensure the centroid remains identical to the crisp value,
+    preserving the Consistency Ratio (CR) achieved during sanitization.
+    """
+    n = crisp_matrix.shape[0]
+    re_fuzzified_matrix = np.empty((n, n), dtype=object)
+    for r in range(n):
+        for c in range(n):
+            # We use from_normalized (or equivalent) to create a 'crisp' fuzzy number
+            # (e.g. TFN(3,3,3)) instead of a spread-out one (e.g. TFN(2,3,4)).
+            # This ensures the CR calculated on the centroids matches the sanitized CR.
+            val = float(crisp_matrix[r, c].value)
+
+            # Note: from_normalized usually expects [0,1], but most implementations
+            # (like TFN) simply wrap the value: TFN(val, val, val).
+            # If the type requires stric 0-1, we use from_saaty with zero spread logic manually.
+            if hasattr(target_number_type, 'from_normalized'):
+                 re_fuzzified_matrix[r, c] = target_number_type.from_normalized(val)
+            else:
+                 re_fuzzified_matrix[r, c] = target_number_type.from_saaty(val)
+
+    return re_fuzzified_matrix
+
+def _perform_iterative_revision(
+    crisp_matrices_per_expert: List[Dict[str, np.ndarray]],
+    root_node: Node,
+    target_cr: float,
+    max_cycles: int,
+    use_bounded_adjustment: bool,
+    bound: float
+) -> tuple[List[Dict[str, np.ndarray]], Dict[str, Any]]:
+    change_log = {}
+    revised_crisp_matrices = copy.deepcopy(crisp_matrices_per_expert)
+
+    for i, expert_matrices_dict in enumerate(revised_crisp_matrices):
+        expert_id = f"expert_{i+1}"
+        expert_change_log = {}
+        stagnated_matrices_for_expert = set()
+
+        for revision_cycle in range(max_cycles):
+            temp_model = Hierarchy(root_node, Crisp)
+            for node_id, matrix in expert_matrices_dict.items():
+                temp_model.set_comparison_matrix(node_id, matrix)
+
+            consistency_report = Consistency.check_model_consistency(temp_model, saaty_cr_threshold=target_cr)
+
+            # Find worst matrix
+            worst_matrix_info = None
+            max_cr = target_cr
+            for node_id, metrics in consistency_report.items():
+                if node_id in stagnated_matrices_for_expert: continue
+                cr_val = metrics.get('saaty_cr')
+                if isinstance(cr_val, (float, np.floating)) and cr_val > max_cr:
+                    max_cr = cr_val
+                    worst_matrix_info = {"node_id": node_id, "cr": cr_val}
+
+            if worst_matrix_info is None: break
+
+            node_id_to_fix = worst_matrix_info['node_id']
+            recommendations = Consistency.get_consistency_recommendations(temp_model, node_id_to_fix)
+
+            if "error" in recommendations or not recommendations.get("revisions"):
+                stagnated_matrices_for_expert.add(node_id_to_fix)
+                continue
+
+            top_rec = recommendations['revisions'][0]
+            new_value = top_rec['suggested_value']
+            if use_bounded_adjustment:
+                new_value = np.clip(new_value, 1/bound, bound)
+
+            if np.isclose(top_rec['current_value'], new_value, atol=1e-4):
+                stagnated_matrices_for_expert.add(node_id_to_fix)
+                continue
+
+            r, c = top_rec['pair']
+            expert_matrices_dict[node_id_to_fix][r, c] = Crisp(new_value)
+            expert_matrices_dict[node_id_to_fix][c, r] = Crisp(1 / new_value)
+
+            if node_id_to_fix not in expert_change_log: expert_change_log[node_id_to_fix] = []
+            expert_change_log[node_id_to_fix].append({'from': top_rec['current_value'], 'to': new_value, 'cycle': revision_cycle})
+
+        change_log[expert_id] = expert_change_log
+
+    return revised_crisp_matrices, change_log
+
 # ==============================================================================
 # REGISTERED SANITIZATION STRATEGIES
 # ==============================================================================
 
-def _perform_iterative_revision(
+def _perform_iterative_revision_retired(
     crisp_matrices_per_expert: List[Dict[str, np.ndarray]],
     root_node: Node,
     target_cr: float,
@@ -266,47 +353,96 @@ def iterative_adjustment_strategy(
     Sanitizes matrices using an iterative adjustment method on a crisp representation.
     This function handles both 'adjust_optimal' and 'adjust_bounded'.
     """
-    # 1. Defuzzify all matrices to crisp
+    # 1. Defuzzify
     crisp_matrices_per_expert = []
     num_experts = len(list(raw_matrices.values())[0])
     for i in range(num_experts):
-        expert_dict = {}
-        for node_id, matrices in raw_matrices.items():
-            matrix_of_crisp_objects = np.array(
-                [[Crisp(cell.defuzzify()) for cell in row] for row in matrices[i]], dtype=object
-            )
-            expert_dict[node_id] = matrix_of_crisp_objects
+        expert_dict = {
+            nid: np.array([[Crisp(c.defuzzify()) for c in row] for row in mats[i]], dtype=object)
+            for nid, mats in raw_matrices.items()
+        }
         crisp_matrices_per_expert.append(expert_dict)
 
-    # 2. Run the iterative revision engine
+    # 2. Revise
     use_bounded = (strategy == "adjust_bounded")
     consistent_crisp_matrices, change_log = _perform_iterative_revision(
         crisp_matrices_per_expert, root_node, target_cr, max_cycles, use_bounded, bound
     )
 
     # 3. Re-fuzzify the results
-    sanitized_fuzzy_matrices = {node_id: [] for node_id in raw_matrices}
-    num_experts = len(list(raw_matrices.values())[0])
+    sanitized_fuzzy_matrices = {nid: [] for nid in raw_matrices}
     for i in range(num_experts):
-        for node_id in raw_matrices.keys():
-            crisp_matrix = consistent_crisp_matrices[i][node_id]
-            n = crisp_matrix.shape[0]
-            re_fuzzified_matrix = np.empty((n, n), dtype=object)
-            for r in range(n):
-                for c in range(n):
-                    crisp_value = crisp_matrix[r, c].value
-                    re_fuzzified_matrix[r, c] = FuzzyScale.get_fuzzy_number(
-                        crisp_value=crisp_value,
-                        number_type=target_number_type,
-                        scale=scale
-                    )
-            sanitized_fuzzy_matrices[node_id].append(re_fuzzified_matrix)
+        for nid in raw_matrices:
+            fuzzy_mat = _refuzzify_matrix(consistent_crisp_matrices[i][nid], target_number_type, scale)
+            sanitized_fuzzy_matrices[nid].append(fuzzy_mat)
 
     return sanitized_fuzzy_matrices, change_log
 
 
 @register_sanitization_strategy("adjust_persistent")
 def adjust_persistent_strategy(
+    raw_matrices: Dict, root_node: Node, target_number_type: type,
+    target_cr: float = 0.1, max_cycles: int = 40, bound: float = 9.0,
+    scale: str = 'linear', **kwargs
+) -> tuple[Dict, Dict]:
+    # Similar to iterative but tries next best revision if stalled
+    # ... (Implementation follows same pattern: defuzzify -> loop -> refuzzify)
+    # Reusing the fix in _refuzzify_matrix at the end
+
+    # 1. Defuzzify
+    crisp_matrices_per_expert = []
+    num_experts = len(list(raw_matrices.values())[0])
+    for i in range(num_experts):
+        expert_dict = {
+            nid: np.array([[Crisp(c.defuzzify()) for c in row] for row in mats[i]], dtype=object)
+            for nid, mats in raw_matrices.items()
+        }
+        crisp_matrices_per_expert.append(expert_dict)
+
+    # 2. Revise Persistent
+    change_log = {}
+    for i in range(num_experts):
+        expert_id = f"expert_{i+1}"
+        expert_change_log = {}
+        mats = crisp_matrices_per_expert[i]
+
+        for _ in range(max_cycles):
+            temp_model = Hierarchy(root_node, Crisp)
+            for nid, m in mats.items(): temp_model.set_comparison_matrix(nid, m)
+
+            report = Consistency.check_model_consistency(temp_model, saaty_cr_threshold=target_cr)
+            worst = max((m['saaty_cr'], nid) for nid, m in report.items() if m.get('is_consistent') is False) if any(m.get('is_consistent') is False for m in report.values()) else None
+
+            if not worst: break
+
+            nid = worst[1]
+            recs = Consistency.get_consistency_recommendations(temp_model, nid).get('revisions', [])
+
+            applied = False
+            for rec in recs:
+                new_val = np.clip(rec['suggested_value'], 1/bound, bound)
+                if not np.isclose(rec['current_value'], new_val, atol=1e-4):
+                    r, c = rec['pair']
+                    mats[nid][r,c] = Crisp(new_val)
+                    mats[nid][c,r] = Crisp(1/new_val)
+                    expert_change_log.setdefault(nid, []).append({'cycle': _, 'from': rec['current_value'], 'to': new_val})
+                    applied = True
+                    break
+            if not applied: break # Stagnated
+
+        change_log[expert_id] = expert_change_log
+
+    # 3. Refuzzify
+    sanitized_fuzzy_matrices = {nid: [] for nid in raw_matrices}
+    for i in range(num_experts):
+        for nid in raw_matrices:
+            fuzzy_mat = _refuzzify_matrix(crisp_matrices_per_expert[i][nid], target_number_type, scale)
+            sanitized_fuzzy_matrices[nid].append(fuzzy_mat)
+
+    return sanitized_fuzzy_matrices, change_log
+
+
+def adjust_persistent_strategy_retired(
     raw_matrices: Dict,
     root_node: Node,
     target_number_type: type,
@@ -439,6 +575,83 @@ def adjust_persistent_strategy(
 
 @register_sanitization_strategy("adjust_triads")
 def adjust_triads_strategy(
+    raw_matrices: Dict, root_node: Node, target_number_type: type,
+    target_cr: float = 0.1, max_cycles: int = 20, bound: float = 9.0,
+    scale: str = 'linear', **kwargs
+) -> tuple[Dict, Dict]:
+    # 1. Defuzzify
+    expert_crisp_matrices = []
+    num_experts = len(list(raw_matrices.values())[0])
+    for i in range(num_experts):
+        expert_dict = {
+            nid: np.array([[Crisp(c.defuzzify()) for c in row] for row in mats[i]], dtype=object)
+            for nid, mats in raw_matrices.items()
+        }
+        expert_crisp_matrices.append(expert_dict)
+
+    # 2. Revise Triads
+    change_log = {}
+    for i in range(num_experts):
+        expert_id = f"expert_{i+1}"
+        mats = expert_crisp_matrices[i]
+        expert_log = {}
+
+        for _ in range(max_cycles):
+            temp_model = Hierarchy(root_node, Crisp)
+            for nid, m in mats.items(): temp_model.set_comparison_matrix(nid, m)
+
+            report = Consistency.check_model_consistency(temp_model, saaty_cr_threshold=target_cr)
+            worst = max((m['saaty_cr'], nid) for nid, m in report.items() if m.get('is_consistent') is False) if any(m.get('is_consistent') is False for m in report.values()) else None
+
+            if not worst: break
+
+            nid = worst[1]
+            mat = mats[nid]
+            n = mat.shape[0]
+            arr = np.array([[c.value for c in r] for r in mat])
+
+            # Find worst triad
+            worst_triad = None
+            max_err = 0
+            for r in range(n):
+                for c in range(n):
+                    for k in range(n):
+                         if r==c or c==k or r==k: continue
+                         err = (arr[r,c] * arr[c,k]) / arr[r,k]
+                         dist = max(err, 1/err)
+                         if dist > max_err:
+                             max_err = dist
+                             worst_triad = (r, c, k, err)
+
+            if not worst_triad or max_err < 1.01: break
+
+            r, c, k, eps = worst_triad
+            delta = (1/eps)**(1/3)
+
+            for (x,y) in [(r,c), (c,k), (r,k)]:
+                 old = mats[nid][x,y].value
+                 # logic: update row-col elements by factor/inverse factor
+                 if (x,y) == (r,k): factor = 1/delta
+                 else: factor = delta
+                 new = np.clip(old * factor, 1/bound, bound)
+                 mats[nid][x,y] = Crisp(new)
+                 mats[nid][y,x] = Crisp(1/new)
+
+            expert_log.setdefault(nid, []).append({'cycle': _})
+
+        change_log[expert_id] = expert_log
+
+    # 3. Refuzzify
+    sanitized_fuzzy_matrices = {nid: [] for nid in raw_matrices}
+    for i in range(num_experts):
+        for nid in raw_matrices:
+            fuzzy_mat = _refuzzify_matrix(expert_crisp_matrices[i][nid], target_number_type, scale)
+            sanitized_fuzzy_matrices[nid].append(fuzzy_mat)
+
+    return sanitized_fuzzy_matrices, change_log
+
+
+def adjust_triads_strategy_retired(
     raw_matrices: Dict,
     root_node: Node,
     target_number_type: type,

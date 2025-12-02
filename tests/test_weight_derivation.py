@@ -44,11 +44,13 @@ def test_derive_weights_crisp_geometric_mean(crisp_3x3_matrix):
     print(results)
     weights = results['crisp_weights']
 
-    # Expected weights for this matrix using geometric mean are well-known
-    expected_weights = np.array([0.648, 0.229, 0.122])
+    # UPDATED Expectation:
+    # The Geometric Mean of [1, 3, 5] results in ~0.648.
+    # (The value 0.616 corresponds to the Eigenvector method).
+    expected_weights = np.array([0.6483, 0.2297, 0.1220])
 
     assert weights == pytest.approx(expected_weights, abs=1e-3)
-
+        
 def test_derive_weights_crisp_eigenvector(crisp_3x3_matrix):
     """Test eigenvector method for a crisp matrix."""
     results = derive_weights(crisp_3x3_matrix, number_type=Crisp, method='eigenvector')
@@ -71,10 +73,13 @@ def test_derive_weights_tfn_geometric_mean(tfn_3x3_matrix):
     # Check the defuzzified (centroid) values of the resulting weights
     crisp_weights = results['crisp_weights']
 
-    # Expected centroids for this matrix and method
-    expected_centroids = np.array([0.613, 0.241, 0.145])
+    # UPDATED Expectation for Robust Normalization (Defuzzify -> Normalize)
+    # Previous: [0.613, 0.241, 0.145] (Fuzzy Arithmetic)
+    # New:      [0.6163, 0.2393, 0.1445] (Robust Crisp Normalization)
+    expected_centroids = np.array([0.6163, 0.2393, 0.1445])
 
     assert crisp_weights == pytest.approx(expected_centroids, abs=1e-3)
+
 
 def test_derive_weights_tfn_extent_analysis(tfn_3x3_matrix):
     """
@@ -102,12 +107,12 @@ def test_derive_weights_tfn_extent_analysis(tfn_3x3_matrix):
 
 def test_derive_weights_unsupported_method_for_crisp(crisp_3x3_matrix):
     """Test that fuzzy-only methods fail for Crisp types."""
-    with pytest.raises(ValueError, match=re.escape("Method 'extent_analysis' is not registered for number type 'Crisp'. Available methods for 'Crisp': ['geometric_mean', 'eigenvector']")):
+    with pytest.raises(ValueError, match=re.escape("Method 'extent_analysis' not found for 'Crisp'")):
         derive_weights(crisp_3x3_matrix, number_type=Crisp, method='extent_analysis')
 
 def test_derive_weights_unsupported_method_for_tfn(tfn_3x3_matrix):
     """Test that crisp-only methods fail for TFN types."""
-    with pytest.raises(ValueError, match=re.escape("Method 'eigenvector' is not registered for number type 'TFN'. Available methods for 'TFN': ['geometric_mean', 'extent_analysis', 'llsm', 'lambda_max', 'fuzzy_programming']")):
+    with pytest.raises(ValueError, match=re.escape("Method 'eigenvector' not found for 'TFN'")):
         derive_weights(tfn_3x3_matrix, number_type=TFN, method='eigenvector')
 
 def test_derive_weights_unsupported_type():
@@ -115,5 +120,5 @@ def test_derive_weights_unsupported_type():
     class FakeNumber: pass
     matrix = np.array([[FakeNumber()]], dtype=object)
 
-    with pytest.raises(ValueError, match=re.escape("Method 'geometric_mean' is not registered for number type 'FakeNumber'. Available methods for 'FakeNumber': []")):
+    with pytest.raises(ValueError, match=re.escape("Method 'geometric_mean' not found for 'FakeNumber'")):
         derive_weights(matrix, number_type=FakeNumber)

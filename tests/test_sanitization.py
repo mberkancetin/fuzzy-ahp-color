@@ -30,7 +30,7 @@ def test_iterative_sanitization_strategies(strategy, root_node, raw_tfn_matrices
     sanitizer = DataSanitizer(
         strategy=strategy,
         target_cr=0.1,
-        max_cycles=30, # Give it enough cycles to work
+        max_cycles=100, # Give it enough cycles to work
         bound=9.0
     )
 

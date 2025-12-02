@@ -119,7 +119,25 @@ def chen_tan_5_level_ifn_scale(value: float) -> Tuple[float, float]:
     }
     return _interpolate_from_dict(value, scale_dict)
 
+def symmetrical_log_base_scale(value: float, scale_base: int = 9)-> Tuple[float, float]:
 
+    if value <= 0:
+            raise ValueError("Saaty-scale value must be positive.")
+
+    pi = 0.1
+
+    log_val = np.log(value) / np.log(scale_base)
+    linguistic_anchor = (log_val + 1) / 2.0
+
+    mu = (1 - pi) * linguistic_anchor
+    nu = 1 - mu - pi
+
+    mu = np.clip(mu, 0, 1)
+    nu = np.clip(nu, 0, 1)
+    if mu + nu > 1.0:
+        nu = 1.0 - mu
+
+    return (mu, nu)
 
 RI_Approximation_Func = Callable[[int, int, Dict[int, float]], float]
 
@@ -222,7 +240,8 @@ class Configuration:
             "nguyen_9_level": nguyen_9_level_ifn_scale,
             "buyukozkan_9_level": buyukozkan_9_level_ifn_scale,
             "dymova_9_level": dymova_9_level_ifn_scale,
-            "chen_tan_5_level": chen_tan_5_level_ifn_scale
+            "chen_tan_5_level": chen_tan_5_level_ifn_scale,
+            "symmetrical_log_base": symmetrical_log_base_scale
         }
 
         # --- Deprecated / Legacy Dictionary Scales ---
@@ -246,15 +265,28 @@ class Configuration:
             }
         }
 
+        # ACADEMIC CITATION:
+        # Adapted from Büyüközkan, G., & Göçer, F. (2018).
+        # "An intuitionistic fuzzy MCDM approach for effective hazardous waste management."
+        # Scale for Intuitionistic Fuzzy Numbers.
+        ACADEMIC_IFN_SCALE = {
+            1: (0.50, 0.40),
+            2: (0.55, 0.35),
+            3: (0.60, 0.30),
+            4: (0.65, 0.25),
+            5: (0.70, 0.20),
+            6: (0.75, 0.15),
+            7: (0.80, 0.10),
+            8: (0.85, 0.05),
+            9: (0.90, 0.05)  # Note: usually sum is < 1 to allow hesitation
+        }
+
         self.FUZZY_IFN_SCALES: Dict[str, Dict[int, tuple]] = {
             "nguyen_9_level": {
                 1: (0.50, 0.40), 2: (0.55, 0.35), 3: (0.60, 0.30), 4: (0.65, 0.25),
                 5: (0.70, 0.20), 6: (0.75, 0.15), 7: (0.80, 0.10), 8: (0.90, 0.05), 9: (1.00, 0.00)
             },
-            "buyukozkan_9_level": {
-                1: (0.50, 0.40), 2: (0.55, 0.35), 3: (0.60, 0.30), 4: (0.65, 0.25),
-                5: (0.70, 0.20), 6: (0.75, 0.15), 7: (0.80, 0.10), 8: (0.85, 0.05), 9: (0.90, 0.00)
-            },
+            "buyukozkan_9_level": ACADEMIC_IFN_SCALE,
             "dymova_9_level": {
                 1: (0.10, 0.90), 2: (0.20, 0.75), 3: (0.35, 0.60), 4: (0.45, 0.50),
                 5: (0.50, 0.45), 6: (0.60, 0.35), 7: (0.75, 0.20), 8: (0.85, 0.10), 9: (0.90, 0.10)
@@ -263,6 +295,8 @@ class Configuration:
                 1: (0.1, 0.8), 2: (0.3, 0.6), 3: (0.5, 0.4), 4: (0.7, 0.2), 5: (0.9, 0.0)
             }
         }
+
+
 
         self.FUZZY_IFN_RATING_SCALES: Dict[str, Dict[int, tuple]] = {
              "boran_rating_7_level": {

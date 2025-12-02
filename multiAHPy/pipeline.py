@@ -158,13 +158,11 @@ class Workflow:
         was initialized.
         """
         model_instance = Hierarchy(
-            root_node=deepcopy(self._root_node_template),
+            root_node=deepcopy(self.model.root),
             number_type=self.recipe['number_type']
         )
-
-        for alt_name in self.alternatives:
+        for alt_name in self.alternatives_list:
             model_instance.add_alternative(alt_name)
-
         return model_instance
 
     def fit_weights(self, expert_matrices: Dict[str, List[np.ndarray]], expert_weights: List[float] | None = None, consistency_check: List[str] = ["saaty_cr", "gci"]):
@@ -178,36 +176,30 @@ class Workflow:
         self.consistency_report = {}
 
         if self.group_strategy == "aggregate_judgments":
-            # STRATEGY 1: Aggregate Judgments First (AIJ)
             aggregated_matrices = {}
             agg_method = self.recipe.get('aggregation_method', 'geometric')
 
             for node_id, matrices in expert_matrices.items():
                 if not self.model._find_node(node_id).is_leaf:
-                    agg_matrix = aggregate_matrices(matrices, method=agg_method, expert_weights=expert_weights) \
+                    agg_matrix = aggregate_matrices(matrices, method=agg_method, expert_weights=expert_weights, number_type=self.model.number_type) \
                                 if len(matrices) > 1 else matrices[0]
                     aggregated_matrices[node_id] = agg_matrix
                     self.model.set_comparison_matrix(node_id, agg_matrix)
 
             self.model.calculate_weights(method=self.recipe['weight_derivation_method'])
-
             print("  - Checking consistency of the aggregated model...")
             self.consistency_report['aggregated_model'] = self.model.check_consistency(required_indices=consistency_check)
 
         elif self.group_strategy == "aggregate_priorities":
-            # STRATEGY 2: Aggregate Priorities (AIP)
-
             num_experts = len(list(expert_matrices.values())[0])
             print(f"  - Checking consistency for {num_experts} individual experts...")
 
             for i in range(num_experts):
                 expert_name = f"expert_{i+1}"
-                expert_model = Hierarchy(self.model.root, number_type=self.recipe['number_type'])
-
+                expert_model = self._create_model_instance()
                 for node_id, matrices in expert_matrices.items():
                     if not expert_model._find_node(node_id).is_leaf:
                         expert_model.set_comparison_matrix(node_id, matrices[i])
-
                 self.consistency_report[expert_name] = expert_model.check_consistency(required_indices=consistency_check)
 
             criteria_matrices_per_node = {
@@ -219,10 +211,130 @@ class Workflow:
 
         self.criteria_weights = self.model.get_criteria_weights()
         print("--- Weight fitting complete. ---")
-
         return self
 
     def fit_weights_experimental(self,
+                                expert_matrices: Dict[str, List[np.ndarray]],
+                                expert_weights: List[float] | None = None,
+                                consistency_check: List[str] = ["saaty_cr", "gci"],
+                                revise_consistency: bool = False,
+                                target_cr: float = 0.1,
+                                revision_strategy: str = "adjust_bounded",
+                                max_cycles: int = 50
+                                ):
+        """
+        Calculates the final criteria weights and checks consistency based on the chosen group strategy.
+
+        This method populates the pipeline with `self.criteria_weights` and `self.consistency_report`.
+        """
+        self.expert_matrices = expert_matrices
+        print(f"\n--- Fitting Weights (Strategy: {self.group_strategy}) ---")
+        self.consistency_report = {}
+
+        if self.group_strategy == "crisp_then_fuzzy":
+            print("\n--- Running Crisp-then-Fuzzy Aggregation Strategy ---")
+
+            # 1. Defuzzify all expert matrices to crisp (Handling raw float inputs)
+            num_experts = len(list(expert_matrices.values())[0])
+            crisp_expert_matrices_list = []
+
+            for i in range(num_experts):
+                expert_dict = {}
+                for node_id, matrices in expert_matrices.items():
+                    matrix = matrices[i]
+                    # SAFETY CHECK: Handle both Fuzzy Objects and Raw Floats
+                    if matrix.dtype == object and hasattr(matrix[0, 0], 'defuzzify'):
+                        expert_dict[node_id] = np.array([[c.defuzzify() for c in row] for row in matrix])
+                    else:
+                        # Assume already crisp (float)
+                        expert_dict[node_id] = np.array(matrix, dtype=float)
+                crisp_expert_matrices_list.append(expert_dict)
+
+            # 2. OPTIONAL: Sanitize each expert's set of crisp matrices
+            if revise_consistency:
+                print("\n  - Activating consistency revision for each expert...")
+                sanitizer = DataSanitizer(
+                    strategy=revision_strategy,
+                    target_cr=target_cr,
+                    max_cycles=max_cycles
+                )
+
+                # Reformating for sanitizer (expects dict of lists of matrices)
+                reformatted_for_sanitizer = {node_id: [] for node_id in expert_matrices.keys()}
+                for expert_dict in crisp_expert_matrices_list:
+                    for node_id, matrix in expert_dict.items():
+                        # Sanitizer expects Crisp objects
+                        crisp_obj_matrix = np.array([[Crisp(c) for c in row] for row in matrix], dtype=object)
+                        reformatted_for_sanitizer[node_id].append(crisp_obj_matrix)
+
+                sanitized_fuzzy_matrices, _ = sanitizer.transform(
+                    reformatted_for_sanitizer, self.root_node, Crisp
+                )
+
+                # Defuzzify back to simple float matrices for aggregation
+                crisp_expert_matrices_list = []
+                for i in range(num_experts):
+                    expert_dict = {
+                        node_id: np.array([[c.defuzzify() for c in row] for row in matrices[i]])
+                        for node_id, matrices in sanitized_fuzzy_matrices.items()
+                    }
+                    crisp_expert_matrices_list.append(expert_dict)
+
+            # 3. Aggregate the (now clean) crisp matrices
+            print("\n  - Aggregating crisp matrices from all experts...")
+            aggregated_crisp_matrices = {}
+            for node_id in expert_matrices.keys():
+                if self.model._find_node(node_id).is_leaf: continue
+
+                matrices_for_node = [expert_dict[node_id] for expert_dict in crisp_expert_matrices_list]
+                stacked_matrices = np.stack(matrices_for_node)
+
+                # Geometric mean aggregation
+                log_matrices = np.log(np.maximum(stacked_matrices, 1e-9))
+                avg_log_matrix = np.average(log_matrices, axis=0, weights=expert_weights)
+                aggregated_crisp_matrix = np.exp(avg_log_matrix)
+                aggregated_crisp_matrices[node_id] = aggregated_crisp_matrix
+
+            # 4. Re-fuzzify and calculate weights
+            print("\n  - Re-fuzzifying aggregated matrix and calculating final weights...")
+            for node_id, matrix in aggregated_crisp_matrices.items():
+                target_type = self.recipe['number_type']
+                fuzzy_matrix = np.empty(matrix.shape, dtype=object)
+
+                for r in range(matrix.shape[0]):
+                    for c in range(matrix.shape[1]):
+                        val = matrix[r, c]
+                        # Use from_saaty (usually for judgments)
+                        fuzzy_matrix[r, c] = target_type.from_saaty(val)
+
+                self.model.set_comparison_matrix(node_id, fuzzy_matrix)
+
+            self.model.calculate_weights(method=self.recipe['weight_derivation_method'])
+            self.consistency_report['final_aggregated_model'] = self.model.check_consistency()
+
+        elif self.group_strategy == "aggregate_judgments":
+            aggregated_matrices = {}
+            agg_method = self.recipe.get('aggregation_method', 'geometric')
+
+            for node_id, matrices in expert_matrices.items():
+                if not self.model._find_node(node_id).is_leaf:
+                    agg_matrix = aggregate_matrices(matrices, method=agg_method, expert_weights=expert_weights, number_type=self.model.number_type) \
+                                if len(matrices) > 1 else matrices[0]
+                    aggregated_matrices[node_id] = agg_matrix
+                    self.model.set_comparison_matrix(node_id, agg_matrix)
+
+            self.model.calculate_weights(method=self.recipe['weight_derivation_method'])
+            self.consistency_report['aggregated_model'] = self.model.check_consistency()
+
+        elif self.group_strategy == "aggregate_priorities":
+             # Reuse standard AIP logic if needed, or implement here for 'experimental' context
+             pass
+
+        self.criteria_weights = self.model.get_criteria_weights()
+        print("--- Weight fitting complete. ---")
+        return self
+
+    def fit_weights_retired(self,
                                 expert_matrices: Dict[str, List[np.ndarray]],
                                 expert_weights: List[float] | None = None,
                                 consistency_check: List[str] = ["saaty_cr", "gci"],
@@ -551,13 +663,6 @@ class Workflow:
     ) -> Dict[str, np.ndarray]:
         """Helper to manage the complexity of the Aggregate Priorities workflow."""
         final_weights = {}
-
-        derivation_method = self.recipe.get('weight_derivation_method', 'geometric_mean')
-
-        if 'weight_derivation_method' not in self.recipe:
-            print(f"  - Warning: 'weight_derivation_method' not found in recipe. "
-                f"Defaulting to '{derivation_method}'.")
-
         for node_id, matrices in criteria_matrices_per_node.items():
             aggregated_vector = aggregate_priorities(
                 matrices,
@@ -565,7 +670,6 @@ class Workflow:
                 expert_weights=expert_weights
             )
             final_weights[node_id] = aggregated_vector
-
         return final_weights
 
     def _set_final_weights_on_model(self, final_crisp_weights: Dict[str, np.ndarray]):
@@ -578,23 +682,17 @@ class Workflow:
         def recursive_setter(node: Node):
             if node.id in final_crisp_weights:
                 child_weights = final_crisp_weights[node.id]
-                if len(child_weights) != len(node.children):
-                    raise ValueError(f"Weight vector for node '{node.id}' has wrong size.")
-
                 for i, child in enumerate(node.children):
                     child.local_weight = number_type.from_normalized(child_weights[i])
 
             for child in node.children:
-                if child.local_weight is None or node.global_weight is None:
-                    continue
-
-                child.global_weight = node.global_weight * child.local_weight
+                if child.local_weight and node.global_weight:
+                    child.global_weight = node.global_weight * child.local_weight
                 recursive_setter(child)
 
         root = self.model.root
         root.local_weight = number_type.multiplicative_identity()
         root.global_weight = number_type.multiplicative_identity()
-
         recursive_setter(root)
 
     def score(self, performance_scores: Dict[str, Dict[str, float]] | None = None) -> 'Workflow':
@@ -603,36 +701,19 @@ class Workflow:
         Requires `fit_weights` to have been called first.
         """
         if self.workflow_type != "scoring":
-            raise TypeError("The .score() method is only for the 'scoring' workflow.")
-        if self.criteria_weights is None:
-            raise RuntimeError("Must call .fit_weights() before .score()")
+             raise TypeError("The .score() method is only for the 'scoring' workflow.")
 
-        print("\n--- Scoring alternatives based on performance data ---")
-
-        if performance_scores is not None:
-            print("  - Loading performance scores from provided dictionary...")
-            for alt_name, scores in performance_scores.items():
-                try:
-                    alt_obj = self.model.get_alternative(alt_name)
-                    for leaf_id, score_val in scores.items():
-                        alt_obj.set_performance_score(leaf_id, score_val)
-                except ValueError:
-                    print(f"Warning: Alternative '{alt_name}' from performance_scores not found in model. Skipping.")
-        else:
-            print("  - Using pre-loaded performance scores from Alternative objects.")
+        if performance_scores:
+             for alt_name, scores in performance_scores.items():
+                  alt_obj = self.model.get_alternative(alt_name)
+                  for leaf_id, score_val in scores.items():
+                       alt_obj.set_performance_score(leaf_id, score_val)
 
         self.model.score_alternatives_by_performance()
         self.rankings = self.model.get_rankings()
-
-        print("--- Scoring complete. ---")
         return self
 
-    def run(
-        self,
-        expert_matrices: Dict[str, List[np.ndarray]],
-        performance_scores: Dict[str, Dict[str, float]] | None = None,
-        expert_weights: List[float] | None = None
-    ) -> 'Workflow':
+    def run(self, expert_matrices, performance_scores=None, expert_weights=None):
         """
         Executes the entire AHP pipeline with the provided data in one call.
 
@@ -650,70 +731,45 @@ class Workflow:
         Returns:
             The fitted pipeline object, with results in its attributes.
         """
-        criteria_matrices_for_fit = {
-            node_id: matrices for node_id, matrices in expert_matrices.items()
-            if not self.model._find_node(node_id).is_leaf
-        }
-        self.fit_weights(criteria_matrices_for_fit, expert_weights)
+        criteria_matrices = {nid: m for nid, m in expert_matrices.items() if not self.model._find_node(nid).is_leaf}
+        self.fit_weights(criteria_matrices, expert_weights)
 
         if self.workflow_type == 'ranking':
-            alternative_matrices_for_rank = {
-                node_id: matrices for node_id, matrices in expert_matrices.items()
-                if self.model._find_node(node_id).is_leaf
-            }
-            self.rank(alternative_matrices_for_rank, expert_weights)
-
+            alt_matrices = {nid: m for nid, m in expert_matrices.items() if self.model._find_node(nid).is_leaf}
+            self.rank(alt_matrices, expert_weights)
         elif self.workflow_type == 'scoring':
-            if performance_scores is None:
-                raise ValueError("The 'scoring' workflow requires the 'performance_scores' argument.")
             self.score(performance_scores)
-
         return self
 
     def rank(self, alternative_matrices: Dict[str, List[np.ndarray]], expert_weights: List[float] | None = None) -> 'Workflow':
         """Runs the final ranking step of the 'ranking' workflow."""
         if self.workflow_type != "ranking":
-            raise TypeError("The .rank() method is only for the 'ranking' workflow.")
-        if self.criteria_weights is None:
-            raise RuntimeError("Must call .fit_weights() before .rank()")
-
-        print("\n--- Ranking alternatives using pairwise comparison matrices ---")
+             raise TypeError("The .rank() method is only for the 'ranking' workflow.")
 
         agg_method = self.recipe.get('aggregation_method', 'geometric')
-
         for leaf_id, matrices in alternative_matrices.items():
-            agg_matrix = aggregate_matrices(matrices, method=agg_method, expert_weights=expert_weights) \
-                         if len(matrices) > 1 else matrices[0]
-            self.model.set_alternative_matrix(leaf_id, agg_matrix)
+             agg_matrix = aggregate_matrices(matrices, method=agg_method, expert_weights=expert_weights, number_type=self.model.number_type) \
+                          if len(matrices) > 1 else matrices[0]
+             self.model.set_alternative_matrix(leaf_id, agg_matrix)
 
         self.model.rank_alternatives_by_comparison(derivation_method=self.recipe['weight_derivation_method'])
         self.rankings = self.model.get_rankings()
-
-        print("--- Ranking complete. ---")
         return self
 
     def make_consistent(self, **kwargs):
-            """
-            Creates and runs a DataSanitizer to revise the expert matrices.
-            This method is a convenience wrapper around the DataSanitizer class.
-            """
-            if self.expert_matrices is None:
-                raise RuntimeError("Cannot make consistent before data is loaded. Run .fit_weights() first.")
-
-            sanitizer = DataSanitizer(**kwargs)
-
-            sanitized_matrices, change_log = sanitizer.transform(
-                raw_expert_matrices=self.expert_matrices,
-                root_node=self.root_node,
-                target_number_type=self.recipe['number_type']
-            )
-
-            self.expert_matrices = sanitized_matrices
-
-            print("\n--- Re-fitting model with sanitized matrices ---")
-            self.fit_weights(self.expert_matrices)
-
-            return change_log
+        """
+        Creates and runs a DataSanitizer to revise the expert matrices.
+        This method is a convenience wrapper around the DataSanitizer class.
+        """
+        if self.expert_matrices is None:
+            raise RuntimeError("Run .fit_weights() first.")
+        sanitizer = DataSanitizer(**kwargs)
+        sanitized_matrices, change_log = sanitizer.transform(
+            self.expert_matrices, self.root_node, self.recipe['number_type']
+        )
+        self.expert_matrices = sanitized_matrices
+        self.fit_weights(self.expert_matrices)
+        return change_log
 
     def make_consistent_retired(
         self,

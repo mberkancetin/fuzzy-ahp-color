@@ -68,37 +68,41 @@ class FuzzyScale:
 
         is_reciprocal = False
         value = float(crisp_value)
+
+        # Handle logic for reciprocals
         if 0 < abs(value) < 1:
             is_reciprocal = True
             value = 1.0 / value
 
-        type_name = number_type.__name__
-        if value == 1:
-            return number_type.multiplicative_identity()
+        if np.isclose(value, 1.0):
+            if type_name == 'TFN':
+                return number_type(1.0, 1.0, 1.0)
+            elif type_name == 'TrFN':
+                return number_type(1.0, 1.0, 1.0, 1.0)
 
         spread = fuzziness
+        params = None
+
         if type_name == 'TFN':
             if spread:
                 params = (max(1, value - spread), value, value + spread)
             else:
                 scale_func = configure_parameters.FUZZY_TFN_SCALES_FUNCTIONS.get(scale)
-                if scale_func is None:
-                    raise ValueError(f"Unknown TFN scale function: '{scale}'. Available: {FuzzyScale.available_tfn_scales()}")
                 params = scale_func(value)
+
         elif type_name == 'TrFN':
             if spread:
                 params = (max(1, value - spread), value - spread/2, value + spread/2, value + spread)
             else:
                 scale_func = configure_parameters.FUZZY_TFN_SCALES_FUNCTIONS.get(scale)
-                if scale_func is None:
-                    raise ValueError(f"Unknown TrFN scale function: '{scale}'. Available: {FuzzyScale.available_tfn_scales()}")
-
                 params = scale_func(value)
-                if type_name == 'TrFN' and len(params) == 3:
+                if len(params) == 3: # Handle TFN scale returned for TrFN request
                     params = (params[0], params[1], params[1], params[2])
+
         elif type_name == 'GFN':
             key = int(np.clip(round(value), 1, 9))
             params = (key, key * (fuzziness / 10.0))
+
         elif type_name == 'IFN':
             scale_func = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS.get(scale)
             if scale_func is None:
@@ -106,14 +110,14 @@ class FuzzyScale:
                      print(f"Warning: IFN scale '{scale}' not found. Defaulting to 'buyukozkan_9_level'.")
                      scale_func = configure_parameters.FUZZY_IFN_SCALES_FUNCTIONS['buyukozkan_9_level']
             params = scale_func(value)
+
         elif type_name == 'IT2TrFN':
             l, m, u = configure_parameters.FUZZY_TFN_SCALES_FUNCTIONS[scale][abs(crisp_value)]
-
             umf = TrFN.from_tfn(TFN(max(1, m-umf_spread), m, m+umf_spread))
             lmf = TrFN.from_tfn(TFN(m-lmf_spread, m, m+lmf_spread))
-
             it2_num = IT2TrFN(umf=umf, lmf=lmf)
             return it2_num.inverse() if crisp_value < 0 else it2_num
+
         elif type_name == 'Crisp':
             return number_type(crisp_value)
         else:
@@ -121,6 +125,7 @@ class FuzzyScale:
 
         fuzzy_num = number_type(*params)
         return fuzzy_num.inverse() if is_reciprocal else fuzzy_num
+
 
 # ==============================================================================
 # 2. MATRIX CREATION AND MANIPULATION
@@ -183,26 +188,42 @@ def create_matrix_from_list(
 
     Returns:
         A complete, reciprocal comparison matrix.
+
+    Special Logic for IFN:
+    Creates a full Crisp matrix first, ensuring A_ji = 1/A_ij (arithmetic reciprocal),
+    and THEN maps every element to IFN. This guarantees that if A_ij = 1, A_ji = 1,
+    and both map to the same IFN (e.g. 0.5, 0.4), avoiding positional bias.
     """
+    # --- IFN Specific Logic: Crisp First Strategy ---
+    if number_type.__name__ == 'IFN':
+        # 1. Create a complete, reciprocally consistent Crisp matrix
+        crisp_matrix = create_matrix_from_list(judgments, Crisp, scale=scale)
+
+        # 2. Convert every cell to IFN using the scale
+        n = crisp_matrix.shape[0]
+        ifn_matrix = create_comparison_matrix(n, number_type)
+
+        for i in range(n):
+            for j in range(n):
+                val = crisp_matrix[i, j].value
+                ifn_matrix[i, j] = FuzzyScale.get_fuzzy_number(val, number_type, scale=scale)
+
+        return ifn_matrix
+
+    # --- Standard Logic for TFN/TrFN/Crisp ---
     num_judgments = len(judgments)
     size = _get_matrix_size_from_list_len(num_judgments)
-
     matrix = create_comparison_matrix(size, number_type)
-
-    # Use an iterator for the judgments list for easy consumption
     judgment_iterator = iter(judgments)
 
-    # Fill the upper triangle of the matrix
     for i in range(size):
         for j in range(i + 1, size):
             try:
                 crisp_value = next(judgment_iterator)
                 matrix[i, j] = FuzzyScale.get_fuzzy_number(crisp_value, number_type, fuzziness=fuzziness, scale=scale)
             except StopIteration:
-                # This should not happen if _get_matrix_size_from_list_len is correct
                 raise ValueError("Mismatch between number of judgments and calculated matrix size.")
 
-    # Fill the lower triangle with reciprocals
     return complete_matrix_from_upper_triangle(matrix)
 
 def create_comparison_matrix(size: int, number_type: Type[Number]) -> np.ndarray:
@@ -212,27 +233,102 @@ def create_comparison_matrix(size: int, number_type: Type[Number]) -> np.ndarray
     multiplicative identity (e.g., 1).
     """
     matrix = np.empty((size, size), dtype=object)
-    identity = number_type.multiplicative_identity()
+
+    # Use from_saaty(1.0) instead of multiplicative_identity().
+    # For IFN, multiplicative_identity is (1,0) (Absolute Truth), but AHP diagonal is Equal (0.45, 0.45).
+    # For TFN, both are (1,1,1).
+    ahp_identity = number_type.from_saaty(1.0)
+
     for i in range(size):
         for j in range(size):
-            matrix[i, j] = identity
+            matrix[i, j] = ahp_identity
 
     return matrix
 
 def complete_matrix_from_upper_triangle(matrix: np.ndarray, consistency_method: str = "centroid", tolerance: float | None = None) -> np.ndarray:
-    """Fills the lower triangle using reciprocals of the upper triangle."""
+    """
+    Ensures the matrix is reciprocal and has correctly defined identity elements on the diagonal.
+
+    Logic:
+    1. Sets the diagonal [i,i] to the exact AHP "Equal Importance" value (Saaty 1).
+    2. Iterates through the upper triangle [i,j].
+    3. If [i,j] contains user data (differs from identity), fill [j,i] with inverse.
+    4. If [i,j] is default/None but [j,i] has user data, fill [i,j] with inverse.
+    5. If both are default/None, reset both to strict identity.
+
+    Args:
+        matrix: The input comparison matrix.
+        consistency_method: Defuzzification method used to check if a value is "identity".
+        tolerance: Tolerance for the identity check.
+    """
+    from .config import configure_parameters
     final_tolerance = tolerance if tolerance is not None else configure_parameters.FLOAT_TOLERANCE
 
     n = matrix.shape[0]
     completed_matrix = matrix.copy()
-    identity_val = matrix[0,0].multiplicative_identity().defuzzify(method=consistency_method)
+
+    # 1. Determine the AHP Identity Element (Saaty 1.0)
+    # Try to deduce type from matrix content
+    elem = completed_matrix[0, 0]
+    if elem is None:
+         # Search for any non-None element to determine type
+         for row in completed_matrix:
+             for cell in row:
+                 if cell is not None:
+                     elem = cell
+                     break
+             if elem: break
+
+    if elem is None: raise ValueError("Matrix contains only None values; cannot determine Number type.")
+
+    number_type = type(elem)
+
+    # Get the strict object for "Equal Importance"
+    # For TFN: (1,1,1). For IFN: (0.45, 0.45) or (0.5, 0.4) depending on scale implementation.
+    ahp_identity = number_type.from_saaty(1.0)
+
+    # Get crisp value for comparison logic
+    try:
+        identity_crisp = ahp_identity.defuzzify(method=consistency_method)
+    except:
+        identity_crisp = 1.0 # Fallback
 
     for i in range(n):
+        # Enforce Diagonal
+        completed_matrix[i, i] = ahp_identity
+
         for j in range(i + 1, n):
-            if abs(completed_matrix[i, j].defuzzify(method=consistency_method) - identity_val) > final_tolerance:
-                completed_matrix[j, i] = completed_matrix[i, j].inverse()
-            elif abs(completed_matrix[j, i].defuzzify(method=consistency_method) - identity_val) > final_tolerance:
-                 completed_matrix[i, j] = completed_matrix[j, i].inverse()
+            upper_val = completed_matrix[i, j]
+            lower_val = completed_matrix[j, i]
+
+            upper_is_set = upper_val is not None
+            lower_is_set = lower_val is not None
+
+            # Function to check if a value is effectively "Equal Importance" (Default)
+            def is_identity(val):
+                try:
+                    return abs(val.defuzzify(method=consistency_method) - identity_crisp) <= final_tolerance
+                except:
+                    return False
+
+            upper_is_identity = upper_is_set and is_identity(upper_val)
+            lower_is_identity = lower_is_set and is_identity(lower_val)
+
+            # Logic: If one side is "informative" (non-identity user input), drive the other.
+
+            if upper_is_set and not upper_is_identity:
+                # Standard case: Upper is user input -> Overwrite Lower
+                completed_matrix[j, i] = upper_val.inverse()
+
+            elif lower_is_set and not lower_is_identity:
+                # Reverse case: Lower is user input -> Overwrite Upper
+                completed_matrix[i, j] = lower_val.inverse()
+
+            else:
+                # Both are identity or None. Force strict AHP identity on both.
+                completed_matrix[i, j] = ahp_identity
+                completed_matrix[j, i] = ahp_identity.inverse()
+
     return completed_matrix
 
 def create_matrix_from_judgments(
@@ -245,7 +341,25 @@ def create_matrix_from_judgments(
     """
     Creates a complete comparison matrix from a dictionary of crisp judgments,
     using a specified fuzzy conversion scale.
+
+    Special Logic for IFN: Crisp First Strategy (see create_matrix_from_list).
     """
+    # --- IFN Specific Logic ---
+    if number_type.__name__ == 'IFN':
+        # 1. Create complete Crisp matrix
+        crisp_matrix = create_matrix_from_judgments(judgments, items, Crisp, scale=scale)
+
+        # 2. Convert to IFN
+        n = crisp_matrix.shape[0]
+        ifn_matrix = create_comparison_matrix(n, number_type)
+
+        for i in range(n):
+            for j in range(n):
+                val = crisp_matrix[i, j].value
+                ifn_matrix[i, j] = FuzzyScale.get_fuzzy_number(val, number_type, scale=scale)
+        return ifn_matrix
+
+    # --- Standard Logic ---
     n = len(items)
     item_map = {name: i for i, name in enumerate(items)}
     matrix = create_comparison_matrix(n, number_type)
@@ -256,9 +370,8 @@ def create_matrix_from_judgments(
         except KeyError as e:
             raise ValueError(f"Item '{e.args[0]}' in judgments not found in the list of items.") from e
 
-        # Ensure judgments are for the upper triangle (i < j)
         if i >= j:
-            raise ValueError(f"Judgment '{item1}' vs '{item2}' is not in the upper triangle. Please only provide one judgment per pair.")
+            raise ValueError(f"Judgment '{item1}' vs '{item2}' is not in the upper triangle.")
 
         matrix[i, j] = FuzzyScale.get_fuzzy_number(value, number_type, fuzziness=fuzziness, scale=scale)
 
@@ -302,29 +415,22 @@ def create_completed_matrix(
 
     # Create a copy to work with, ensuring dtype is object to hold Nones
     ipcm_copy = incomplete_matrix.copy().astype(object)
-
-    # Replace None with np.nan which is the standard for numerical missing values
     ipcm_copy[ipcm_copy == None] = np.nan
 
-    # Now call the numerical completion engine
+    # Numerical completion
     completed_crisp_matrix = complete_matrix(
         incomplete_matrix=ipcm_copy,
         method=completion_method,
         **kwargs
     )
 
-    # --- Step 2: Convert the completed crisp matrix to the target fuzzy type ---
+    # Convert to fuzzy type
     n = completed_crisp_matrix.shape[0]
-    # Create an empty matrix to hold the new fuzzy objects
     final_fuzzy_matrix = create_comparison_matrix(n, number_type)
 
-    # Use an iterator to fill the upper triangle
     for i in range(n):
         for j in range(i + 1, n):
             crisp_value = completed_crisp_matrix[i, j]
-
-            # Use your existing FuzzyScale logic to convert the crisp value
-            # into a TFN, IFN, etc., based on the specified scale.
             final_fuzzy_matrix[i, j] = FuzzyScale.get_fuzzy_number(
                 crisp_value,
                 number_type,
@@ -332,8 +438,6 @@ def create_completed_matrix(
                 scale=scale
             )
 
-    # --- Step 3: Fill the lower triangle with reciprocals ---
-    # This ensures the final matrix is perfectly reciprocal in the fuzzy sense.
     return complete_matrix_from_upper_triangle(final_fuzzy_matrix)
 
 def rebuild_consistent_matrix(inconsistent_matrix: np.ndarray) -> np.ndarray:
@@ -355,27 +459,17 @@ def rebuild_consistent_matrix(inconsistent_matrix: np.ndarray) -> np.ndarray:
         A new, perfectly consistent NumPy array of the same size.
     """
     n = inconsistent_matrix.shape[0]
-
     try:
         matrix = inconsistent_matrix.astype(float)
     except (ValueError, TypeError):
-        print(inconsistent_matrix)
-        raise TypeError("Input matrix for rebuild_consistent_matrix must be numerical or convertible to float.")
+        raise TypeError("Input must be numerical.")
 
     sanitized_matrix = np.maximum(matrix, 1e-9)
-
     try:
         log_matrix = np.log(sanitized_matrix)
         weights = np.exp(np.mean(log_matrix, axis=1))
-
-        weight_sum = np.sum(weights)
-        if weight_sum < 1e-9:
-            return np.ones((n, n), dtype=float)
-
-        weights /= weight_sum
-
-    except Exception as e:
-        print(f"Warning: Could not calculate geometric mean weights during rebuild. Defaulting to equal weights. Error: {e}")
+        weights /= np.sum(weights)
+    except Exception:
         weights = np.full(n, 1.0 / n)
 
     consistent_matrix = np.zeros((n, n), dtype=float)
@@ -385,7 +479,6 @@ def rebuild_consistent_matrix(inconsistent_matrix: np.ndarray) -> np.ndarray:
                 consistent_matrix[i, j] = weights[i] / weights[j]
             else:
                 consistent_matrix[i, j] = 1.0
-
     return consistent_matrix
 
 def rebuild_from_eigenvector(inconsistent_matrix: np.ndarray) -> np.ndarray:
@@ -400,19 +493,16 @@ def rebuild_from_eigenvector(inconsistent_matrix: np.ndarray) -> np.ndarray:
         A new, perfectly consistent NumPy array of the same size.
     """
     n = inconsistent_matrix.shape[0]
-
     try:
         matrix = inconsistent_matrix.astype(float)
     except (ValueError, TypeError):
-        raise TypeError("Input matrix for rebuild_from_eigenvector must be numerical.")
+        raise TypeError("Input must be numerical.")
 
     crisp_object_matrix = np.array([[Crisp(c) for c in row] for row in matrix], dtype=object)
-
     try:
         results = derive_weights(crisp_object_matrix, Crisp, method="eigenvector")
         weights = results['crisp_weights']
-    except Exception as e:
-        print(f"Warning: Could not calculate eigenvector. Defaulting to equal weights. Error: {e}")
+    except Exception:
         weights = np.full(n, 1.0 / n)
 
     consistent_matrix = np.zeros((n, n), dtype=float)
@@ -422,5 +512,4 @@ def rebuild_from_eigenvector(inconsistent_matrix: np.ndarray) -> np.ndarray:
                 consistent_matrix[i, j] = weights[i] / weights[j]
             else:
                 consistent_matrix[i, j] = 1.0
-
     return consistent_matrix

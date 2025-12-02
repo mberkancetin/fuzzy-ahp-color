@@ -15,11 +15,11 @@ def available_methods() -> dict:
         List of method names for each fuzzy or crisp number
     """
     return {
-        "Crisp": ["centroid", "value"], # to keep integrity
+        "Crisp": ["centroid", "value"],
         "TFN": ["centroid", "graded_mean", "alpha_cut", "weighted_average", "pessimistic", "optimistic"],
         "TrFN": ["centroid", "average"],
+        "IFN": ['score', 'normalized_score', 'accuracy', 'value', 'centroid'],
         "GNF": ["centroid", "pessimistic_99_percent"],
-        "IFN": ['centroid', 'score', 'normalized_score', 'entropy', 'accuracy', 'value']
     }
 
 def normalize_crisp_weights(crisp_weights: np.ndarray) -> np.ndarray:
@@ -39,12 +39,8 @@ def normalize_crisp_weights(crisp_weights: np.ndarray) -> np.ndarray:
     if np.all(crisp_weights == 0):
         n = len(crisp_weights)
         return np.ones(n) / n
-
     weight_sum = np.sum(crisp_weights)
-    if weight_sum > 0:
-        return crisp_weights / weight_sum
-    else:
-        raise ValueError("Sum of weights is not positive, cannot normalize")
+    return crisp_weights / weight_sum if weight_sum > 0 else crisp_weights
 
 def value_method_crisp(crisp: Crisp) -> float:
     return crisp.value
@@ -184,9 +180,9 @@ def chen_tan_scoring_ifn(ifn: IFN) -> float:
     Calculates a normalized score for an IFN on a [0, 1] scale.
     Based on Chen & Tan (1994), this is suitable for using IFNs as
     weights or performance values in aggregation, as it's always positive.
-    Formula: S = (μ + 1 - ν) / 2
+    Formula: S = (μ + (1 - ν)) / 2
     """
-    return (ifn.mu + 1.0 - ifn.nu) / 2.0
+    return (ifn.mu + (1.0 - ifn.nu)) / 2.0
 
 def accuracy_method_ifn(ifn: IFN) -> float:
     """
@@ -325,7 +321,7 @@ GFN.register_defuzzify_method('pessimistic_99_percent', pessimistic_method_gfn)
 IFN.register_defuzzify_method('score', score_method_ifn)
 IFN.register_defuzzify_method('normalized_score', chen_tan_scoring_ifn)
 IFN.register_defuzzify_method('centroid', xu_yager_scoring_ifn) # 'centroid' is an alias for 'xu_yager'
-IFN.register_defuzzify_method('xu_yager', xu_yager_scoring_ifn) 
+IFN.register_defuzzify_method('xu_yager', xu_yager_scoring_ifn)
 IFN.register_defuzzify_method('accuracy', accuracy_method_ifn)
 IFN.register_defuzzify_method('value', value_method_ifn)
 IFN.register_defuzzify_method('entropy', entropy_method_ifn)

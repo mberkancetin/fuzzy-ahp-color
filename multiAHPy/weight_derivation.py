@@ -42,7 +42,6 @@ def register_weight_method(number_type_name: str, method_name: str):
 @register_weight_method('TFN', 'geometric_mean')
 @register_weight_method('TrFN', 'geometric_mean')
 @register_weight_method('GFN', 'geometric_mean')
-@register_weight_method('IFN', 'geometric_mean')
 @register_weight_method('IT2TrFN', 'geometric_mean')
 @register_weight_method('Crisp', 'geometric_mean')
 def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consistency_method: str = "centroid") -> List[Number]:
@@ -70,32 +69,21 @@ def geometric_mean_method(matrix: np.ndarray, number_type: Type[Number], consist
     Returns:
         A list of derived weights of the specified number_type.
     """
-    from .config import configure_parameters
-
     n = matrix.shape[0]
-
     row_geo_means = []
     for i in range(n):
-        row_product = number_type.multiplicative_identity()
+        row_prod = number_type.multiplicative_identity()
         for cell in matrix[i, :]:
-            row_product = row_product * cell
-        row_geo_means.append(row_product.power(1.0 / n))
+            row_prod = row_prod * cell
+        row_geo_means.append(row_prod.power(1.0 / n))
 
-    total_sum = sum(row_geo_means, number_type.neutral_element())
-
-    if abs(total_sum.defuzzify(method=consistency_method)) < 1e-9:
-        print("  - Warning: Geometric mean resulted in near-zero weights. Defaulting to equal weights.")
-        n = matrix.shape[0]
-        equal_weight_val = 1.0 / n
-        return [number_type.from_normalized(equal_weight_val) for _ in range(n)]
-
-    sum_inverse = total_sum.inverse()
-    weights = [geo_mean * sum_inverse for geo_mean in row_geo_means]
-    return weights
+    # Standard fuzzy normalization involves complex arithmetic.
+    # Often, we return the geometric means and let the defuzzification handle normalization.
+    return row_geo_means
 
 
-@register_weight_method('IFN', 'ifn_geometric_mean')
-def ifn_geometric_mean_method(matrix: np.ndarray, number_type: Type[IFN], consistency_method: str = "centroid", **kwargs) -> List[IFN]:
+@register_weight_method('IFN', 'ifn_geometric_mean_alternative')
+def ifn_geometric_mean_alternative_method(matrix: np.ndarray, number_type: Type[IFN], consistency_method: str = "centroid", **kwargs) -> List[IFN]:
     """
     Derives IFN weights using the correct Intuitionistic Fuzzy Geometric Mean.
     This method operates component-wise and avoids numerical decay.
@@ -107,8 +95,6 @@ def ifn_geometric_mean_method(matrix: np.ndarray, number_type: Type[IFN], consis
     for i in range(n):
         row = matrix[i, :]
 
-        # --- CORRECT GEOMETRIC MEAN CALCULATION ---
-        # Geometric mean of the mu values
         prod_mu = np.prod([cell.mu for cell in row])
         geo_mean_mu = np.power(prod_mu, 1.0 / n)
 
@@ -119,7 +105,6 @@ def ifn_geometric_mean_method(matrix: np.ndarray, number_type: Type[IFN], consis
 
         row_geo_means.append(number_type(geo_mean_mu, geo_mean_nu))
 
-    # --- Summation and Normalization (must also be done correctly) ---
     # The sum of IFNs is A + B = (mu_a + mu_b - mu_a*mu_b, nu_a*nu_b)
     total_sum = number_type.neutral_element() # IFN(0, 1)
     for rgm in row_geo_means:
@@ -145,6 +130,43 @@ def ifn_geometric_mean_method(matrix: np.ndarray, number_type: Type[IFN], consis
 
     # return final_ifn_weights
     return row_geo_means
+
+@register_weight_method('IFN', 'ifn_geometric_mean')
+def ifn_geometric_mean_method(matrix: np.ndarray, number_type: Type[IFN]) -> Dict:
+    """
+    Component-wise geometric mean for IFNs (Xu, 2007).
+    Returns raw fuzzy geometric means (as 'weights') and separately calculated
+    normalized crisp weights.
+
+    Note: Standard IFN geometric mean results are values in [0,1] representing
+    preference, not shares summing to 1.
+    """
+    n = matrix.shape[0]
+    row_geo_means = []
+
+    for i in range(n):
+        row = matrix[i, :]
+
+        # Product of mu
+        prod_mu = np.prod([c.mu for c in row])
+        geo_mu = np.power(prod_mu, 1.0 / n)
+
+        # Product of (1-nu)
+        prod_non_nu = np.prod([1.0 - c.nu for c in row])
+        geo_nu = 1.0 - np.power(prod_non_nu, 1.0 / n)
+
+        row_geo_means.append(number_type(geo_mu, geo_nu))
+
+    # Calculate Normalized Crisp Weights using Chen-Tan score (Always positive)
+    # S = (mu + 1 - nu) / 2
+    raw_scores = np.array([(w.mu + (1.0 - w.nu))/2.0 for w in row_geo_means])
+    total = np.sum(raw_scores)
+    norm_crisp = raw_scores / total if total > 0 else np.ones(n)/n
+
+    return {
+        "weights": row_geo_means, # Raw fuzzy values (Importances)
+        "crisp_weights": norm_crisp
+    }
 
 @register_weight_method('Crisp', 'eigenvector')
 def eigenvector_method(matrix: np.ndarray, number_type: Type[Crisp], **kwargs) -> List[Crisp]:
@@ -449,44 +471,42 @@ def derive_weights(
     type_name = number_type.__name__
     key = (type_name, method)
 
-    derivation_func = WEIGHT_DERIVATION_REGISTRY.get(key)
+    # Fallback for IFN
+    if type_name == 'IFN' and method == 'geometric_mean':
+        key = ('IFN', 'ifn_geometric_mean')
 
-    if derivation_func is None:
-        available_methods = [m for (t, m) in WEIGHT_DERIVATION_REGISTRY.keys() if t == type_name]
-        raise ValueError(
-            f"Method '{method}' is not registered for number type '{type_name}'. Available methods for '{type_name}': {available_methods}"
-        )
+    func = WEIGHT_DERIVATION_REGISTRY.get(key)
+    if not func:
+        raise ValueError(f"Method '{method}' not found for '{type_name}'")
 
-    result = derivation_func(matrix, number_type)
+    result = func(matrix, number_type)
 
     if isinstance(result, dict):
-        if 'weights' not in result or 'crisp_weights' not in result:
-             raise TypeError(f"Registered method {derivation_func.__name__} must return a dict with 'weights' and 'crisp_weights'")
         return result
-    elif isinstance(result, list):
-        weights = result
-        crisp_weights = np.array([w.defuzzify(method=consistency_method) for w in weights])
-        weight_sum = np.sum(crisp_weights)
 
-        if abs(weight_sum) < 1e-9:
-            # If the sum is zero, we cannot normalize. This indicates a failed derivation.
-            # We should return equal weights as a robust fallback.
-            print("  - Warning: Weight derivation resulted in an all-zero crisp weight vector. Defaulting to equal weights.")
-            n = matrix.shape[0]
-            normalized_crisp_weights = np.full(n, 1.0 / n)
-        else:
-            # Perform the normalization
-            normalized_crisp_weights = crisp_weights / weight_sum
+    # If list of fuzzy numbers returned
+    weights = result
 
-        # Return the safely normalized weights
-        return {
-            "weights": weights,
-            "crisp_weights": normalized_crisp_weights,
-            "possibility_matrix": None,
-            "min_degrees": None,
-            "lambda_consistency": None,
-            "optimization_success": None,
-            "optimization_message": None
-        }
+    # Robust Normalization Logic
+    # 1. Defuzzify using the requested method (e.g. 'normalized_score' for IFN)
+    raw_crisp = np.array([w.defuzzify(method=consistency_method) for w in weights])
+
+    # 2. Enforce non-negativity (AHP constraint)
+    raw_crisp = np.maximum(raw_crisp, 0)
+
+        # 3. Normalize
+    total = np.sum(raw_crisp)
+    if total < 1e-9:
+        normalized_crisp = np.ones(len(weights)) / len(weights)
     else:
-        raise TypeError(f"Registered method {derivation_func.__name__} returned an unexpected type: {type(result)}")
+        normalized_crisp = raw_crisp / total
+
+    return {
+        "weights": weights,
+        "crisp_weights": normalized_crisp,
+        "possibility_matrix": None,
+        "min_degrees": None,
+        "lambda_consistency": None,
+        "optimization_success": None,
+        "optimization_message": None
+        }
