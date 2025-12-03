@@ -220,7 +220,9 @@ class Workflow:
                                 revise_consistency: bool = False,
                                 target_cr: float = 0.1,
                                 revision_strategy: str = "adjust_bounded",
-                                max_cycles: int = 50
+                                max_cycles: int = 50,
+                                hesitation_factor: float = 0.2,
+                                base_hesitation: float = 0.05
                                 ):
         """
         Calculates the final criteria weights and checks consistency based on the chosen group strategy.
@@ -234,23 +236,41 @@ class Workflow:
         if self.group_strategy == "crisp_then_fuzzy":
             print("\n--- Running Crisp-then-Fuzzy Aggregation Strategy ---")
 
-            # 1. Defuzzify all expert matrices to crisp (Handling raw float inputs)
             num_experts = len(list(expert_matrices.values())[0])
             crisp_expert_matrices_list = []
 
+            # 1. Defuzzify all expert matrices to crisp
             for i in range(num_experts):
                 expert_dict = {}
                 for node_id, matrices in expert_matrices.items():
                     matrix = matrices[i]
-                    # SAFETY CHECK: Handle both Fuzzy Objects and Raw Floats
                     if matrix.dtype == object and hasattr(matrix[0, 0], 'defuzzify'):
                         expert_dict[node_id] = np.array([[c.defuzzify() for c in row] for row in matrix])
                     else:
-                        # Assume already crisp (float)
                         expert_dict[node_id] = np.array(matrix, dtype=float)
                 crisp_expert_matrices_list.append(expert_dict)
 
-            # 2. OPTIONAL: Sanitize each expert's set of crisp matrices
+            # 2. CAPTURE RAW CONSISTENCY (CR)
+            # We calculate this NOW, before sanitization changes the values.
+            # This ensures hesitation reflects the ORIGINAL confusion of the expert.
+            raw_consistency_map = {} # {node_id: [cr_expert1, cr_expert2, ...]}
+
+            for node_id in expert_matrices.keys():
+                if self.model._find_node(node_id).is_leaf: continue
+
+                raw_consistency_map[node_id] = []
+                for i in range(num_experts):
+                    # Get the raw crisp matrix
+                    raw_crisp = crisp_expert_matrices_list[i][node_id]
+
+                    # Wrap in Crisp objects for consistency calculator
+                    temp_obj = np.array([[Crisp(x) for x in row] for row in raw_crisp], dtype=object)
+                    cr = Consistency.calculate_saaty_cr(temp_obj)
+                    raw_consistency_map[node_id].append(cr)
+
+            # 3. Sanitize (if enabled)
+            # This alters the crisp values to be consistent, but we have already saved the
+            # "bad" CRs to generate the hesitation later.
             if revise_consistency:
                 print("\n  - Activating consistency revision for each expert...")
                 sanitizer = DataSanitizer(
@@ -259,55 +279,71 @@ class Workflow:
                     max_cycles=max_cycles
                 )
 
-                # Reformating for sanitizer (expects dict of lists of matrices)
-                reformatted_for_sanitizer = {node_id: [] for node_id in expert_matrices.keys()}
+                reformatted = {node_id: [] for node_id in expert_matrices.keys()}
                 for expert_dict in crisp_expert_matrices_list:
                     for node_id, matrix in expert_dict.items():
-                        # Sanitizer expects Crisp objects
-                        crisp_obj_matrix = np.array([[Crisp(c) for c in row] for row in matrix], dtype=object)
-                        reformatted_for_sanitizer[node_id].append(crisp_obj_matrix)
+                        crisp_obj = np.array([[Crisp(c) for c in row] for row in matrix], dtype=object)
+                        reformatted[node_id].append(crisp_obj)
 
-                sanitized_fuzzy_matrices, _ = sanitizer.transform(
-                    reformatted_for_sanitizer, self.root_node, Crisp
-                )
+                sanitized_fuzzy, _ = sanitizer.transform(reformatted, self.root_node, Crisp)
 
-                # Defuzzify back to simple float matrices for aggregation
+                # Update our working list with the SANITIZED crisp matrices
                 crisp_expert_matrices_list = []
                 for i in range(num_experts):
                     expert_dict = {
-                        node_id: np.array([[c.defuzzify() for c in row] for row in matrices[i]])
-                        for node_id, matrices in sanitized_fuzzy_matrices.items()
+                        nid: np.array([[c.defuzzify() for c in row] for row in mats[i]])
+                        for nid, mats in sanitized_fuzzy.items()
                     }
                     crisp_expert_matrices_list.append(expert_dict)
 
-            # 3. Aggregate the (now clean) crisp matrices
-            print("\n  - Aggregating crisp matrices from all experts...")
-            aggregated_crisp_matrices = {}
+            # 4. INDIVIDUAL FUZZIFICATION & AGGREGATION
+            print(f"\n  - Individually fuzzifying {num_experts} experts based on RAW CR...")
+            target_type = self.recipe['number_type']
+
             for node_id in expert_matrices.keys():
                 if self.model._find_node(node_id).is_leaf: continue
 
-                matrices_for_node = [expert_dict[node_id] for expert_dict in crisp_expert_matrices_list]
-                stacked_matrices = np.stack(matrices_for_node)
+                fuzzy_matrices_to_aggregate = []
 
-                # Geometric mean aggregation
-                log_matrices = np.log(np.maximum(stacked_matrices, 1e-9))
-                avg_log_matrix = np.average(log_matrices, axis=0, weights=expert_weights)
-                aggregated_crisp_matrix = np.exp(avg_log_matrix)
-                aggregated_crisp_matrices[node_id] = aggregated_crisp_matrix
+                for i in range(num_experts):
+                    # A. Get the SANITIZED Values
+                    crisp_matrix_float = crisp_expert_matrices_list[i][node_id]
+                    rows, cols = crisp_matrix_float.shape
 
-            # 4. Re-fuzzify and calculate weights
-            print("\n  - Re-fuzzifying aggregated matrix and calculating final weights...")
-            for node_id, matrix in aggregated_crisp_matrices.items():
-                target_type = self.recipe['number_type']
-                fuzzy_matrix = np.empty(matrix.shape, dtype=object)
+                    # B. Get the RAW Hesitation (from original input)
+                    original_cr = raw_consistency_map[node_id][i]
 
-                for r in range(matrix.shape[0]):
-                    for c in range(matrix.shape[1]):
-                        val = matrix[r, c]
-                        # Use from_saaty (usually for judgments)
-                        fuzzy_matrix[r, c] = target_type.from_saaty(val)
+                    # C. Create Fuzzy Matrix
+                    # Combines: Correct Logic (Sanitized Value) + True Uncertainty (Raw CR)
+                    expert_fuzzy_matrix = np.empty((rows, cols), dtype=object)
 
-                self.model.set_comparison_matrix(node_id, fuzzy_matrix)
+                    for r in range(rows):
+                        for c in range(cols):
+                            val = crisp_matrix_float[r, c]
+
+                            if target_type.__name__ == 'IFN':
+                                expert_fuzzy_matrix[r, c] = IFN.from_saaty_with_consistency(
+                                    val,
+                                    matrix_cr=original_cr, # <-- Use the high CR here
+                                    hesitation_factor=hesitation_factor,
+                                    base_hesitation=base_hesitation
+                                )
+                            else:
+                                expert_fuzzy_matrix[r, c] = target_type.from_saaty(val)
+
+                    fuzzy_matrices_to_aggregate.append(expert_fuzzy_matrix)
+
+                # 5. AGGREGATE
+                agg_method = self.recipe.get('aggregation_method', 'geometric')
+
+                final_fuzzy_matrix = aggregate_matrices(
+                    fuzzy_matrices_to_aggregate,
+                    method=agg_method,
+                    expert_weights=expert_weights,
+                    number_type=target_type
+                )
+
+                self.model.set_comparison_matrix(node_id, final_fuzzy_matrix)
 
             self.model.calculate_weights(method=self.recipe['weight_derivation_method'])
             self.consistency_report['final_aggregated_model'] = self.model.check_consistency()

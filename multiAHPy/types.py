@@ -728,6 +728,55 @@ class IFN:
             return IFN(mu=mu, nu=nu)
 
     @staticmethod
+    def from_saaty_with_consistency(
+        value: float,
+        matrix_cr: float,
+        hesitation_factor: float = 0.2, # Your requested 0.2 factor
+        base_hesitation: float = 0.05   # Your requested 0.05 base
+    ) -> IFN:
+        """
+        Creates an IFN where hesitation is derived from the Matrix CR.
+        Even for value=1.0 (Diagonal), hesitation is applied.
+
+        Formula: pi = max(base, factor * min(CR, 1.0))
+        CRITICAL: Applies hesitation logic even to the Diagonal (value=1.0).
+        """
+        if value <= 0: raise ValueError("Saaty value must be > 0")
+
+        # 1. Calculate Dynamic Hesitation (Pi)
+        # Pi increases as CR increases.
+        # Example: if CR=0.1, factor=0.2, base=0.05 -> pi = 0.07
+        cr_capped = min(abs(matrix_cr), 1.0)
+        pi = base_hesitation + (hesitation_factor * cr_capped)
+
+        # Cap pi to ensure we don't break math (must be < 1)
+        pi = min(pi, 0.99)
+
+        # 2. Determine Linguistic Anchor (The "Core" Meaning)
+        if np.isclose(value, 1.0):
+            # For Diagonal/Equal: The core meaning is exactly 50/50.
+            # Anchor represents the split between Mu and Nu if Pi were 0.
+            anchor = 0.5
+        else:
+            # For other values, use Logarithmic Scale to find position in [0,1]
+            scale_base = 9
+            # Handle reciprocals naturally via log (log(1/x) = -log(x))
+            log_val = np.log(value) / np.log(scale_base)
+            # Map [-1, 1] to [0, 1]
+            anchor = (log_val + 1) / 2.0
+            anchor = np.clip(anchor, 0.01, 0.99)
+
+        # 3. Distribute Mass based on Hesitation
+        # The available mass for Membership + Non-Membership is (1 - pi).
+        # We distribute this mass according to the Anchor ratio.
+
+        mu = (1 - pi) * anchor
+        nu = (1 - pi) * (1 - anchor)
+
+        return IFN(mu, nu)
+
+
+    @staticmethod
     def from_saaty(value: float) -> IFN:
         """
         Converts a Saaty scale value to an IFN using academically cited scales.
@@ -769,52 +818,6 @@ class IFN:
 
         mu = mu_l + ratio * (mu_u - mu_l)
         nu = nu_l + ratio * (nu_u - nu_l)
-
-        return IFN(mu, nu)
-
-    @staticmethod
-    def from_saaty_with_consistency(
-        value: float,
-        matrix_cr: float,
-        hesitation_factor: float = 0.2,
-        scale_base: int = 9
-    ) -> IFN:
-        """
-        Çetin & Gündüz (2026): Creates an IFN from a Saaty-scale value, where the hesitation (pi) is
-        dynamically calculated based on the consistency of the source matrix.
-
-        Args:
-            value (float): The crisp Saaty-scale judgment (e.g., 3.0, 1/5).
-            matrix_cr (float): The Consistency Ratio of the matrix where the
-                               judgment originated.
-            hesitation_factor (float, optional): The maximum hesitation to assign
-                                                 (beta parameter). Defaults to 0.2.
-            scale_base (int, optional): The base of the Saaty scale (e.g., 9).
-                                        Defaults to 9.
-        """
-        if value <= 0:
-            raise ValueError("Saaty-scale value must be positive.")
-
-        # 1. Calculate Hesitation (pi)
-        pi = hesitation_factor * max(min(abs(matrix_cr), 1.0), 0.05)
-
-        # 2. Calculate Linguistic Anchor (l)
-        # We use a small epsilon to avoid log(0) if value is extremely small,
-        # though the check above should prevent it.
-        log_val = np.log(value) / np.log(scale_base) # log_base(value)
-        linguistic_anchor = (log_val + 1) / 2.0
-
-        # 3. Calculate Membership (mu)
-        mu = (1 - pi) * linguistic_anchor
-
-        # 4. Calculate Non-membership (nu)
-        nu = 1 - mu - pi
-
-        # Final clipping for safety and to handle floating point inaccuracies
-        mu = np.clip(mu, 0, 1)
-        nu = np.clip(nu, 0, 1)
-        if mu + nu > 1.0:
-            nu = 1.0 - mu
 
         return IFN(mu, nu)
 

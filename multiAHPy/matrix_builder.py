@@ -440,6 +440,53 @@ def create_completed_matrix(
 
     return complete_matrix_from_upper_triangle(final_fuzzy_matrix)
 
+def create_matrix_dynamic_hesitancy(
+    judgments: Dict[tuple, int] | List[float],
+    n: int, # Matrix size
+    consistency_method: str = "centroid"
+) -> np.ndarray:
+    """
+    Builds an IFN matrix where hesitation is derived from the crisp consistency ratio.
+    """
+    from .consistency import Consistency
+    from .types import IFN, Crisp
+
+    # PASS 1: Build Temporary Crisp Matrix
+    # We use your existing logic but force type to Crisp
+    if isinstance(judgments, list):
+        crisp_matrix = create_matrix_from_list(judgments, Crisp)
+    else:
+        # Assuming dict judgments provided, items list required, simplified here
+        raise NotImplementedError("For dynamic scale, use list input or adapt logic")
+
+    # PASS 2: Calculate Consistency (CR)
+    # We calculate CR on the crisp proxy.
+    cr = Consistency.calculate_saaty_cr(
+        crisp_matrix,
+        consistency_method=consistency_method
+    )
+
+    print(f"  - Dynamic Scale: Detected CR={cr:.4f}. Adjusting hesitation...")
+
+    # PASS 3: Generate IFN Matrix
+    ifn_matrix = create_comparison_matrix(n, IFN)
+
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                # Identity with base hesitation
+                ifn_matrix[i, j] = IFN.from_saaty_with_consistency(1.0, matrix_cr=0.0)
+            else:
+                val = crisp_matrix[i, j].value
+                # Generate IFN using the CR of the whole matrix
+                ifn_matrix[i, j] = IFN.from_saaty_with_consistency(
+                    val,
+                    matrix_cr=cr,
+                    hesitation_factor=1.0 # 1.0 means if CR is 0.1, added hesitation is 0.1
+                )
+
+    return ifn_matrix
+
 def rebuild_consistent_matrix(inconsistent_matrix: np.ndarray) -> np.ndarray:
     """
     Creates a new, perfectly consistent matrix from an inconsistent one.

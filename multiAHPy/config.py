@@ -89,8 +89,8 @@ def _interpolate_from_dict(value: float, scale_dict: Dict[int, tuple]) -> Tuple[
     return (mu, nu)
 
 # ACADEMIC CITATION:
-# Adapted from Büyüközkan, G., & Göçer, F. (2018).
-# "An intuitionistic fuzzy MCDM approach for effective hazardous waste management."
+# Adapted from Çebi, S., Kahraman, C., Onar, SÇ., & Öztayşi, B. (2024).
+# "Ranking of factors affecting pricing in construction projects by intuitionistic fuzzy analytic hierarchy process with ordered pairs."
 # Scale for Intuitionistic Fuzzy Numbers.
 ACADEMIC_IFN_SCALE = {
     1: (0.50, 0.40),
@@ -101,8 +101,8 @@ ACADEMIC_IFN_SCALE = {
     6: (0.75, 0.15),
     7: (0.80, 0.10),
     8: (0.85, 0.05),
-    9: (0.90, 0.05)  # Note: usually sum is < 1 to allow hesitation
-}
+    9: (0.90, 0.05)
+    }
 
 def nguyen_9_level_ifn_scale(value: float) -> Tuple[float, float]:
     """Functional IFN scale based on Nguyen (2019) with interpolation."""
@@ -114,7 +114,25 @@ def nguyen_9_level_ifn_scale(value: float) -> Tuple[float, float]:
 
 def buyukozkan_9_level_ifn_scale(value: float) -> Tuple[float, float]:
     """Functional IFN scale based on Büyüközkan (2016) with interpolation."""
-    scale_dict = ACADEMIC_IFN_SCALE
+    scale_dict = {
+        1: (0.50, 0.40), 2: (0.55, 0.35), 3: (0.60, 0.30), 4: (0.65, 0.25),
+        5: (0.70, 0.20), 6: (0.75, 0.15), 7: (0.80, 0.10), 8: (0.85, 0.05), 9: (0.90, 0.00)
+    }
+    return _interpolate_from_dict(value, scale_dict)
+
+def cebi_9_level_ifn_scale(value: float) -> Tuple[float, float]:
+    """Ordered Pairs IFN scale based on Çebi, et al. (2024) with interpolation."""
+    scale_dict = {
+        1: (0.50, 0.50),
+        2: (0.55, 0.45),
+        3: (0.60, 0.40),
+        4: (0.65, 0.35),
+        5: (0.70, 0.30),
+        6: (0.75, 0.25),
+        7: (0.80, 0.20),
+        8: (0.85, 0.15),
+        9: (0.90, 0.10)
+    }
     return _interpolate_from_dict(value, scale_dict)
 
 def dymova_9_level_ifn_scale(value: float) -> Tuple[float, float]:
@@ -151,6 +169,49 @@ def symmetrical_log_base_scale(value: float, scale_base: int = 9)-> Tuple[float,
         nu = 1.0 - mu
 
     return (mu, nu)
+
+def _saaty_to_preference_score(saaty_value: float) -> float:
+    """
+    Converts a Saaty-scale value (1/9 to 9) to a normalized preference
+    score 'l' on a [0, 1] scale using a logarithmic mapping.
+    l = (log9(x) + 1) / 2
+    """
+    if saaty_value <= 0:
+        raise ValueError("Saaty value must be positive.")
+    # Use np.log for natural log, and log base conversion: log_b(x) = log(x)/log(b)
+    log9_val = np.log(saaty_value) / np.log(9)
+    return (log9_val + 1.0) / 2.0
+
+def dynamic_ifn_conversion_func(saaty_value: float, cr: float) -> tuple[float, float]:
+    """
+    A sophisticated, data-driven function to convert a Saaty value to an IFN (mu, nu).
+
+    1. Calculates hesitation (pi) from the matrix's Consistency Ratio (CR).
+    2. Maps the Saaty value to a [0, 1] preference score (l).
+    3. Calculates mu by discounting 'l' with the hesitation 'pi'.
+    4. Calculates nu to ensure mu + nu + pi = 1.
+    """
+    # 1. Calculate hesitation from CR
+    # Cap CR at a reasonable maximum for calculating pi, e.g., 2.0
+    pi = 0.2 * min(cr, 2.0)
+
+    # 2. Map Saaty value to preference score 'l'
+    l = _saaty_to_preference_score(saaty_value)
+
+    # 3. Calculate mu
+    mu = (1 - pi) * l
+
+    # 4. Calculate nu
+    nu = 1 - mu - pi
+
+    # Final clipping to ensure validity due to floating point math
+    mu = np.clip(mu, 0, 1)
+    nu = np.clip(nu, 0, 1)
+    if mu + nu > 1.0:
+        nu = 1.0 - mu
+
+    return mu, nu
+
 
 RI_Approximation_Func = Callable[[int, int, Dict[int, float]], float]
 
@@ -252,9 +313,11 @@ class Configuration:
         self.FUZZY_IFN_SCALES_FUNCTIONS: Dict[str, ScaleFunction] = {
             "nguyen_9_level": nguyen_9_level_ifn_scale,
             "buyukozkan_9_level": buyukozkan_9_level_ifn_scale,
+            "cebi_9_level": cebi_9_level_ifn_scale,
             "dymova_9_level": dymova_9_level_ifn_scale,
             "chen_tan_5_level": chen_tan_5_level_ifn_scale,
-            "symmetrical_log_base": symmetrical_log_base_scale
+            "symmetrical_log_base": symmetrical_log_base_scale,
+            "dynamic_hesitation": dynamic_ifn_conversion_func
         }
 
         # --- Deprecated / Legacy Dictionary Scales ---

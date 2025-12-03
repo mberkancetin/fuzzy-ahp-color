@@ -209,8 +209,6 @@ def _aggregate_ifn_ifwa(matrices: List[np.ndarray], n: int, number_type: Type[IF
     aggregated_matrix = create_comparison_matrix(n, number_type)
     for i in range(n):
         for j in range(n):
-            if i == j: continue
-
             # Formula:
             # (1 - PRODUCT((1-mu_k)^w_k), PRODUCT(nu_k^w_k))
             # PRODUCT((1-mu_k)^w_k)
@@ -234,9 +232,9 @@ def _aggregate_ifn_consensus(matrices: List[np.ndarray], n: int, number_type: Ty
     """
     num_experts = len(matrices)
     if num_experts < 2:
-        return matrices[0] # No consensus to calculate with one expert
+        return matrices[0]
 
-    # Step 1: Calculate the similarity matrix between all pairs of experts
+    # Step 1: Calculate the similarity matrix
     expert_similarity_matrix = np.ones((num_experts, num_experts))
     for k1 in range(num_experts):
         for k2 in range(k1 + 1, num_experts):
@@ -245,16 +243,16 @@ def _aggregate_ifn_consensus(matrices: List[np.ndarray], n: int, number_type: Ty
             avg_sim = np.mean(similarities)
             expert_similarity_matrix[k1, k2] = expert_similarity_matrix[k2, k1] = avg_sim
 
-    # Step 2: Calculate the average agreement (support) for each expert
+    # Step 2: Calculate average agreement (support)
     agreement_scores = np.sum(expert_similarity_matrix, axis=1) / (num_experts - 1)
 
-    # Step 3: Calculate the consensus degree coefficient (CDC) for each expert
+    # Step 3: Calculate consensus weights (CDC)
     total_agreement = np.sum(agreement_scores)
     consensus_weights = agreement_scores / total_agreement if total_agreement > 0 else [1/num_experts]*num_experts
 
     print(f"  - Consensus weights calculated for experts: {[f'{w:.3f}' for w in consensus_weights]}")
 
-    # Step 4: Aggregate using the consensus weights (using the IFWA method)
+    # Step 4: Aggregate using consensus weights via IFWA logic
     return _aggregate_ifn_ifwa(matrices, n, number_type, consensus_weights)
 
 @register_aggregation_method('IFN', 'ifowa')
