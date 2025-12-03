@@ -644,6 +644,119 @@ def generate_full_report(
 
     return full_report
 
+def generate_performance_matrix(model, threshold_percent=0.60):
+    """
+    Generates a detailed breakdown of scores exactly like the Excel matrix.
+
+    Rows: Criteria Weights, Sub-crit Weights, Companies, Threshold, Max.
+    Columns: Hierarchical (Criterion -> Sub-criterion).
+    """
+
+    # 1. Setup Columns (MultiIndex) and Data Storage
+    # Structure: (Criterion Name, Sub-Criterion Name)
+    columns = []
+
+    # We need to capture the weights for the header rows
+    crit_weights_row = {}
+    sub_weights_row = {}
+
+    # To store company data: { 'Company A': { ('C1', 'S11'): 0.0386, ... } }
+    company_rows = {alt.name: {} for alt in model.alternatives}
+
+    # 2. Iterate through the Hierarchy
+    for crit in model.root.children:
+        crit_weight = crit.local_weight.defuzzify()
+
+        # Determine effective children (if a criterion has no sub-criteria, it treats itself as one)
+        children = crit.children if crit.children else [crit]
+
+        criterion_total_scores = {alt.name: 0.0 for alt in model.alternatives}
+        criterion_max_possible = 0.0
+
+        for sub in children:
+            # -- A. Get Weights --
+            # Global weight of sub-criterion is what matters for the final sum
+            global_w = sub.global_weight.defuzzify()
+
+            col_key = (crit.id, sub.id)
+            columns.append(col_key)
+
+            crit_weights_row[col_key] = crit_weight # Repeat parent weight for display
+            sub_weights_row[col_key] = global_w
+
+            criterion_max_possible += global_w
+
+            # -- B. Calculate Weighted Scores for Companies --
+            for alt in model.alternatives:
+                # Raw performance (0.0 to 1.0)
+                raw_perf = alt.get_performance_score(sub.id)
+                if raw_perf is None: raw_perf = 0.0
+
+                # Weighted Contribution
+                weighted_score = global_w * raw_perf
+
+                company_rows[alt.name][col_key] = weighted_score
+                criterion_total_scores[alt.name] += weighted_score
+
+        # -- C. Add the "Total" Column for this Criterion --
+        total_col_key = (crit.id, f"TOTAL ({crit.id})")
+        columns.append(total_col_key)
+
+        crit_weights_row[total_col_key] = np.nan # Spacer
+        sub_weights_row[total_col_key] = np.nan  # Spacer
+
+        # Store totals for companies
+        for alt_name in company_rows:
+            company_rows[alt_name][total_col_key] = criterion_total_scores[alt_name]
+
+    # 3. Build the DataFrame
+    # Create MultiIndex for columns
+    midx = pd.MultiIndex.from_tuples(columns, names=["Criterion", "Sub-Criterion"])
+
+    # Combine all rows
+    df = pd.DataFrame(columns=midx)
+
+    # Add Weight Rows
+    df.loc["Criteria Weight"] = crit_weights_row
+    df.loc["Global Sub-Weight"] = sub_weights_row
+
+    # Add Company Rows
+    for alt_name, scores in company_rows.items():
+        df.loc[alt_name] = scores
+
+    # 4. Add Stats Rows (Threshold & Max)
+    # Theoretical Max is simply the Global Weight (assuming perf=1.0)
+    # Threshold is Max * percentage
+
+    theo_max_row = {}
+    threshold_row = {}
+
+    for col in columns:
+        crit_id, sub_id = col
+
+        if "TOTAL" in sub_id:
+            # For total columns, sum the sub-weights of that criterion
+            # (We have to find the matching sub-columns in the df to sum them)
+            # Simplest way: Look at "Global Sub-Weight" row for this criterion group
+            # But "Global Sub-Weight" is NaN for the total column.
+
+            # Calculate sum of weights for this criterion group
+            relevant_weights = [val for k, val in sub_weights_row.items() if k[0] == crit_id and not np.isnan(val)]
+            group_max = sum(relevant_weights)
+
+            theo_max_row[col] = group_max
+            threshold_row[col] = group_max * threshold_percent
+        else:
+            # For specific sub-criteria
+            g_weight = sub_weights_row[col]
+            theo_max_row[col] = g_weight
+            threshold_row[col] = g_weight * threshold_percent
+
+    df.loc[f"Threshold ({int(threshold_percent*100)}%)"] = threshold_row
+    df.loc["Theoretical Max"] = theo_max_row
+
+    return df
+
 def export_full_report(
     model: Hierarchy,
     target: str,
