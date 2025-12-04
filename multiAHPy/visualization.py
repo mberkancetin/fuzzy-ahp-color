@@ -547,11 +547,12 @@ def plot_ifn_sensitivity_analysis(
     alt_to_track = next((a for a in model.alternatives if a.name == alternative_name), None)
 
     if not all([parent_node, criterion_to_vary, alt_to_track]):
-        raise ValueError("Invalid Node or Alternative IDs provided.")
+        raise ValueError("Invalid Node or Alternative IDs.")
 
-    # 1. Capture Original State (Weights AND Hesitations)
-    # We store the *Object* to get the pi, and the *Defuzzified Value* for proportioning.
+    # 1. Capture Original State & Calculate Effective Normalized Weight
     original_state = {}
+    raw_sum = 0.0
+
     for child in parent_node.children:
         w_obj = child.local_weight
         if hasattr(w_obj, 'pi'):
@@ -562,9 +563,12 @@ def plot_ifn_sensitivity_analysis(
             score = w_obj.defuzzify() if hasattr(w_obj, 'defuzzify') else float(w_obj)
 
         original_state[child.id] = {'pi': pi, 'score': score, 'obj': w_obj}
+        raw_sum += score
 
-    # Original Crisp Weight of the target (for the vertical line)
-    target_orig_weight = original_state[criterion_to_vary_id]['score']
+    # FIX: Calculate the Effective Normalized Weight for the vertical line
+    # This matches what the scoring engine actually uses.
+    raw_target_score = original_state[criterion_to_vary_id]['score']
+    effective_orig_weight = raw_target_score / raw_sum if raw_sum > 0 else 0
 
     # 2. Setup Plot
     fig, ax = plt.subplots(figsize=figsize)
@@ -572,79 +576,70 @@ def plot_ifn_sensitivity_analysis(
     weight_range = np.linspace(0.01, 0.99, 40)
 
     # 3. Simulation Loop
-    for idx, hes_mode in enumerate(hesitation_levels):
-        scores_trace = []
+    try:
+        for idx, hes_mode in enumerate(hesitation_levels):
+            scores_trace = []
 
-        label = f"Iso-Hesitant (Real)" if hes_mode == 'original' else f"Hesitation $\pi={hes_mode}$"
-        line_style = '-' if hes_mode == 'original' else '--'
-        width = 2.5 if hes_mode == 'original' else 1.5
+            label = f"Hesitation: {hes_mode}" if isinstance(hes_mode, (float, int)) else "Iso-Hesitant (Real)"
+            style = '--' if isinstance(hes_mode, (float, int)) else '-'
 
-        try:
             for new_weight_mag in weight_range:
-                # --- A. Set Target Criterion Weight ---
-                # Determine Pi to use
-                if hes_mode == 'original':
-                    target_pi = original_state[criterion_to_vary_id]['pi']
-                else:
-                    target_pi = float(hes_mode)
+                # A. Target Weight
+                if hes_mode == 'original': target_pi = original_state[criterion_to_vary_id]['pi']
+                else: target_pi = float(hes_mode)
 
-                # Construct IFN with (Magnitude=new_weight, Hesitation=target_pi)
                 criterion_to_vary.local_weight = model.number_type.from_score_and_hesitation(
                     new_weight_mag, target_pi
                 )
 
-                # --- B. Redistribute Sibling Weights ---
+                # B. Redistribute Siblings (Normalizing to sum to 1.0 together)
+                # We simulate a world where Total Sum is forced to 1.0 (new_weight + remaining)
+                # so 'new_weight_mag' IS the effective weight.
                 siblings = [c for c in parent_node.children if c.id != criterion_to_vary_id]
-                orig_sib_sum = sum(original_state[s.id]['score'] for s in siblings)
-                remaining_weight_mag = 1.0 - new_weight_mag
+
+                # Get proportions of siblings relative to each other
+                orig_sib_raw_sum = sum(original_state[s.id]['score'] for s in siblings)
+                remaining_mass = 1.0 - new_weight_mag
 
                 for sib in siblings:
-                    # 1. Determine new Magnitude (Score)
-                    if orig_sib_sum > 1e-9:
-                        ratio = original_state[sib.id]['score'] / orig_sib_sum
-                        new_sib_score = ratio * remaining_weight_mag
+                    if orig_sib_raw_sum > 1e-9:
+                        ratio = original_state[sib.id]['score'] / orig_sib_raw_sum
+                        new_sib_score = ratio * remaining_mass
                     else:
-                        new_sib_score = remaining_weight_mag / len(siblings)
+                        new_sib_score = remaining_mass / len(siblings)
 
-                    # 2. Determine Pi to use
-                    if hes_mode == 'original':
-                        sib_pi = original_state[sib.id]['pi']
-                    else:
-                        sib_pi = float(hes_mode)
+                    if hes_mode == 'original': sib_pi = original_state[sib.id]['pi']
+                    else: sib_pi = float(hes_mode)
 
-                    # 3. Construct IFN
                     sib.local_weight = model.number_type.from_score_and_hesitation(
                         new_sib_score, sib_pi
                     )
 
-                # --- C. Calculate ---
+                # C. Calculate
                 model._recalculate_global_weights()
                 model.calculate_alternative_scores()
 
-                # --- D. Record ---
-                # Use normalized_score for display consistency
                 final_val = alt_to_track.overall_score.defuzzify(method='normalized_score')
                 scores_trace.append(final_val)
 
-            # Plot this trace
-            ax.plot(weight_range, scores_trace, label=label, linestyle=line_style, linewidth=width, color=colors[idx])
+            ax.plot(weight_range, scores_trace, label=label, linestyle=style, linewidth=2, color=colors[idx])
 
-        finally:
-            # Reset weights for next loop iteration
-            pass
+    finally:
+        # 4. Restore State
+        for child in parent_node.children:
+            child.local_weight = original_state[child.id]['obj']
+        model._recalculate_global_weights()
+        model.calculate_alternative_scores()
 
-    # 4. Restore Original Model State
-    for child in parent_node.children:
-        child.local_weight = original_state[child.id]['obj']
-    model._recalculate_global_weights()
-    model.calculate_alternative_scores()
+    # 5. Finalize
+    # Plot the line at the EFFECTIVE weight, not the RAW weight
+    ax.axvline(x=effective_orig_weight, color='r', linestyle=':', linewidth=2,
+               label=f'Effective Orig Weight ({effective_orig_weight:.3f})')
 
-    # 5. Finalize Plot
-    ax.axvline(x=target_orig_weight, color='r', linestyle=':', label=f'Current Weight ({target_orig_weight:.3f})')
-    ax.set_xlabel(f"Local Weight of '{criterion_to_vary_id}'")
+    ax.set_xlabel(f"Normalized Local Weight of '{criterion_to_vary_id}'")
     ax.set_ylabel(f"Final Score for '{alternative_name}'")
-    ax.set_title(f"Hesitation-Aware Sensitivity Analysis: '{criterion_to_vary_id}'")
-    ax.legend(loc='best')
+    ax.set_title(f"Sensitivity Analysis: '{criterion_to_vary_id}'")
+    ax.legend()
     ax.grid(True, alpha=0.3)
 
     return fig
