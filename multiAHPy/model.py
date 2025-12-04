@@ -59,7 +59,7 @@ class Node(Generic[Number]):
     def _set_model_reference(self, model: 'Hierarchy[Number]'):
         """Recursively sets the model reference for this node and all its children."""
         self.model = model
-        for c in self.children: c._set_model_reference(model)
+        for child in self.children: child._set_model_reference(model)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes the Node and its children to a JSON-compatible dictionary."""
@@ -722,48 +722,15 @@ class Hierarchy(Generic[Number]):
         2. Each alternative has a normalized performance score (0 to 1) set for EVERY
         leaf node using `alt.set_performance_score()`.
         """
-        if not self.alternatives:
-            print("Warning: No alternatives to score.")
-            return
-
+        if not self.alternatives: return
         if self.number_type.__name__ == 'IFN':
-            leaf_nodes = self.root.get_all_leaf_nodes()
-
             for alt in self.alternatives:
-                # Gather the performance scores and weights for this alternative
-                perf_scores_as_ifn = []
-                leaf_global_weights = []
-
-                for leaf in leaf_nodes:
-                    if leaf.id not in alt.performance_scores:
-                        raise ValueError(f"Missing score for leaf '{leaf.id}' in alt '{alt.name}'.")
-
-                    # Convert the crisp performance score to an IFN
-                    perf_score_val = alt.get_performance_score(leaf.id)
-                    perf_scores_as_ifn.append(self.number_type.from_normalized(perf_score_val))
-
-                    # Get the crisp global weight of the leaf criterion
-                    # We must use a safe, positive defuzzification method
-                    leaf_global_weights.append(leaf.global_weight.defuzzify(method='centroid'))
-
-                # Normalize the crisp weights to be sure they sum to 1
-                weight_sum = sum(leaf_global_weights)
-                normalized_weights = [w / weight_sum for w in leaf_global_weights]
-
-                # --- Apply the IFWA formula ---
-                # This is the same formula as in your `aggregate_priorities_ifwa`
-                prod_1_minus_mu = np.prod([(1 - p.mu) ** w for p, w in zip(perf_scores_as_ifn, normalized_weights)])
-                prod_nu = np.prod([p.nu ** w for p, w in zip(perf_scores_as_ifn, normalized_weights)])
-
-                agg_mu = 1 - prod_1_minus_mu
-                agg_nu = prod_nu
-
-                alt.overall_score = self.number_type(agg_mu, agg_nu)
-
+                alt.node_scores = {}
+                alt.overall_score = self._calculate_performance_score_recursive_ifn(self.root, alt)
         else:
             for alt in self.alternatives:
-                alt.overall_score = self._calculate_performance_score_recursive(self.root, alt)
-
+                alt.node_scores = {}
+                alt.overall_score = self._calculate_score_recursive_arithmetic(self.root, alt)
         print("Alternative performance scoring complete.")
 
     def score_alternatives_by_performance_ifwa(self):
@@ -821,6 +788,58 @@ class Hierarchy(Generic[Number]):
 
         print("Alternative performance scoring complete.")
 
+    def _calculate_performance_score_recursive_ifn(self, node: Node, alt: Alternative) -> Number:
+        """
+        Recursively calculates score using IFWA operator at each level.
+        Populates node_scores for every visited node.
+        """
+        if node.id in alt.node_scores:
+            return alt.node_scores[node.id]
+
+        if node.is_leaf:
+            raw_val = alt.get_performance_score(node.id)
+            if raw_val is None:
+                print(f"Warning: No score for {alt.name} on {node.id}, assuming 0.")
+                raw_val = 0.0
+
+            # Convert raw scalar (0-1) to IFN
+            if hasattr(self.number_type, 'from_normalized'):
+                score = self.number_type.from_normalized(raw_val)
+            else:
+                score = self.number_type(raw_val) # Fallback
+
+            alt.node_scores[node.id] = score
+            return score
+
+        child_scores = []
+        child_weights = []
+
+        for child in node.children:
+            c_score = self._calculate_performance_score_recursive_ifn(child, alt)
+            child_scores.append(c_score)
+
+            defuzz_meth = 'normalized_score' if self.number_type.__name__ == 'IFN' else 'centroid'
+            w_val = child.local_weight.defuzzify(method=defuzz_meth)
+            child_weights.append(max(0, w_val))
+
+        total_w = sum(child_weights)
+        if total_w > 1e-9:
+            norm_weights = [w / total_w for w in child_weights]
+        else:
+            norm_weights = [1.0/len(child_weights)] * len(child_weights)
+
+        # Calculate IFWA: (1 - prod((1-mu)^w), prod(nu^w))
+        prod_mu_term = np.prod([(1 - s.mu)**w for s, w in zip(child_scores, norm_weights)])
+        prod_nu_term = np.prod([s.nu**w for s, w in zip(child_scores, norm_weights)])
+
+        agg_mu = 1 - prod_mu_term
+        agg_nu = prod_nu_term
+
+        agg_score = self.number_type(agg_mu, agg_nu)
+
+        alt.node_scores[node.id] = agg_score
+        return agg_score
+
     def _calculate_performance_score_recursive(self, node: Node[Number], alt: Alternative) -> Number:
         """
         (Helper for score_alternatives_by_performance)
@@ -841,6 +860,41 @@ class Hierarchy(Generic[Number]):
 
         alt.node_scores[node.id] = total_score
         return total_score
+
+    def _calculate_score_recursive_arithmetic(self, node, alt):
+        # Standard arithmetic recursion (SumProduct)
+        if node.id in alt.node_scores: return alt.node_scores[node.id]
+
+        if node.is_leaf:
+            val = alt.get_performance_score(node.id) or 0.0
+            score = self.number_type.from_normalized(val)
+            alt.node_scores[node.id] = score
+            return score
+
+        # Sum(weight * child_score)
+        total = self.number_type.neutral_element()
+        for child in node.children:
+            s = self._calculate_score_recursive_arithmetic(child, alt)
+            total = total + (s * child.local_weight)
+
+        alt.node_scores[node.id] = total
+        return total
+
+    def calculate_alternative_scores(self):
+        """
+        Universal wrapper to calculate final scores.
+        Detects whether to use Ranking (Matrices) or Scoring (Performance Data).
+        Required by visualization module.
+        """
+        if self.alternatives and any(a.performance_scores for a in self.alternatives):
+            self.score_alternatives_by_performance()
+            return
+        leaves = self.root.get_all_leaf_nodes()
+        if leaves and leaves[0].comparison_matrix is not None:
+            self.rank_alternatives_by_comparison()
+            return
+
+        print("Warning: calculate_alternative_scores could not determine method (no data found).")
 
     def get_rankings(self, consistency_method: str = 'centroid', **kwargs) -> List[Tuple[str, float]]:
         """
