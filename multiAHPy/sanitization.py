@@ -45,10 +45,11 @@ class DataSanitizer:
         print(f"\n--- Sanitizing Expert Data (Strategy: {self.strategy}) ---")
 
         strategy_func = SANITIZATION_STRATEGIES[self.strategy]
+        root_node_copy = copy.deepcopy(root_node)
 
         all_args = {
             "raw_matrices": raw_expert_matrices,
-            "root_node": root_node,
+            "root_node": root_node_copy,
             "target_number_type": target_number_type,
             **self.strategy_kwargs
         }
@@ -68,19 +69,11 @@ def _refuzzify_matrix(crisp_matrix: np.ndarray, target_number_type: type, scale:
     re_fuzzified_matrix = np.empty((n, n), dtype=object)
     for r in range(n):
         for c in range(n):
-            # We use from_normalized (or equivalent) to create a 'crisp' fuzzy number
-            # (e.g. TFN(3,3,3)) instead of a spread-out one (e.g. TFN(2,3,4)).
-            # This ensures the CR calculated on the centroids matches the sanitized CR.
             val = float(crisp_matrix[r, c].value)
-
-            # Note: from_normalized usually expects [0,1], but most implementations
-            # (like TFN) simply wrap the value: TFN(val, val, val).
-            # If the type requires stric 0-1, we use from_saaty with zero spread logic manually.
             if hasattr(target_number_type, 'from_normalized'):
                  re_fuzzified_matrix[r, c] = target_number_type.from_normalized(val)
             else:
                  re_fuzzified_matrix[r, c] = target_number_type.from_saaty(val)
-
     return re_fuzzified_matrix
 
 def _perform_iterative_revision(

@@ -233,13 +233,28 @@ class Workflow:
         print(f"\n--- Fitting Weights (Strategy: {self.group_strategy}) ---")
         self.consistency_report = {}
 
+        working_expert_matrices = expert_matrices
+
+        if revise_consistency:
+            print("\n  - Activating consistency revision for each expert...")
+            sanitizer = DataSanitizer(
+                strategy=revision_strategy,
+                target_cr=target_cr,
+                max_cycles=max_cycles
+            )
+            if self.group_strategy != "crisp_then_fuzzy":
+                working_expert_matrices, _ = sanitizer.transform(
+                    expert_matrices,
+                    self.model.root, 
+                    self.recipe['number_type']
+                )
+
         if self.group_strategy == "crisp_then_fuzzy":
             print("\n--- Running Crisp-then-Fuzzy Aggregation Strategy ---")
 
             num_experts = len(list(expert_matrices.values())[0])
             crisp_expert_matrices_list = []
 
-            # 1. Defuzzify all expert matrices to crisp
             for i in range(num_experts):
                 expert_dict = {}
                 for node_id, matrices in expert_matrices.items():
@@ -250,9 +265,6 @@ class Workflow:
                         expert_dict[node_id] = np.array(matrix, dtype=float)
                 crisp_expert_matrices_list.append(expert_dict)
 
-            # 2. CAPTURE RAW CONSISTENCY (CR)
-            # We calculate this NOW, before sanitization changes the values.
-            # This ensures hesitation reflects the ORIGINAL confusion of the expert.
             raw_consistency_map = {} # {node_id: [cr_expert1, cr_expert2, ...]}
 
             for node_id in expert_matrices.keys():
@@ -260,17 +272,12 @@ class Workflow:
 
                 raw_consistency_map[node_id] = []
                 for i in range(num_experts):
-                    # Get the raw crisp matrix
                     raw_crisp = crisp_expert_matrices_list[i][node_id]
 
-                    # Wrap in Crisp objects for consistency calculator
                     temp_obj = np.array([[Crisp(x) for x in row] for row in raw_crisp], dtype=object)
                     cr = Consistency.calculate_saaty_cr(temp_obj)
                     raw_consistency_map[node_id].append(cr)
 
-            # 3. Sanitize (if enabled)
-            # This alters the crisp values to be consistent, but we have already saved the
-            # "bad" CRs to generate the hesitation later.
             if revise_consistency:
                 print("\n  - Activating consistency revision for each expert...")
                 sanitizer = DataSanitizer(
@@ -287,7 +294,6 @@ class Workflow:
 
                 sanitized_fuzzy, _ = sanitizer.transform(reformatted, self.root_node, Crisp)
 
-                # Update our working list with the SANITIZED crisp matrices
                 crisp_expert_matrices_list = []
                 for i in range(num_experts):
                     expert_dict = {
@@ -296,7 +302,6 @@ class Workflow:
                     }
                     crisp_expert_matrices_list.append(expert_dict)
 
-            # 4. INDIVIDUAL FUZZIFICATION & AGGREGATION
             print(f"\n  - Individually fuzzifying {num_experts} experts based on RAW CR...")
             target_type = self.recipe['number_type']
 
@@ -306,15 +311,11 @@ class Workflow:
                 fuzzy_matrices_to_aggregate = []
 
                 for i in range(num_experts):
-                    # A. Get the SANITIZED Values
                     crisp_matrix_float = crisp_expert_matrices_list[i][node_id]
                     rows, cols = crisp_matrix_float.shape
 
-                    # B. Get the RAW Hesitation (from original input)
                     original_cr = raw_consistency_map[node_id][i]
 
-                    # C. Create Fuzzy Matrix
-                    # Combines: Correct Logic (Sanitized Value) + True Uncertainty (Raw CR)
                     expert_fuzzy_matrix = np.empty((rows, cols), dtype=object)
 
                     for r in range(rows):
@@ -333,7 +334,6 @@ class Workflow:
 
                     fuzzy_matrices_to_aggregate.append(expert_fuzzy_matrix)
 
-                # 5. AGGREGATE
                 agg_method = self.recipe.get('aggregation_method', 'geometric')
 
                 final_fuzzy_matrix = aggregate_matrices(
@@ -352,19 +352,62 @@ class Workflow:
             aggregated_matrices = {}
             agg_method = self.recipe.get('aggregation_method', 'geometric')
 
-            for node_id, matrices in expert_matrices.items():
+            for node_id, matrices in working_expert_matrices.items():
                 if not self.model._find_node(node_id).is_leaf:
-                    agg_matrix = aggregate_matrices(matrices, method=agg_method, expert_weights=expert_weights, number_type=self.model.number_type) \
-                                if len(matrices) > 1 else matrices[0]
-                    aggregated_matrices[node_id] = agg_matrix
+                    agg_matrix = aggregate_matrices(
+                        matrices,
+                        method=agg_method,
+                        expert_weights=expert_weights,
+                        number_type=self.model.number_type
+                    ) if len(matrices) > 1 else matrices[0]
+
                     self.model.set_comparison_matrix(node_id, agg_matrix)
 
             self.model.calculate_weights(method=self.recipe['weight_derivation_method'])
-            self.consistency_report['aggregated_model'] = self.model.check_consistency()
+            self.consistency_report['aggregated_model'] = self.model.check_consistency(required_indices=consistency_check)
 
         elif self.group_strategy == "aggregate_priorities":
-             # Reuse standard AIP logic if needed, or implement here for 'experimental' context
-             pass
+            print("  - Strategy: AIP (Solving individual models then aggregating weights)")
+
+            num_experts = len(list(working_expert_matrices.values())[0])
+            criteria_matrices_per_node = {nid: m for nid, m in working_expert_matrices.items() if not self.model._find_node(nid).is_leaf}
+
+            individual_weights_per_node = {} # {node_id: [vec_expert1, vec_expert2...]}
+
+            for i in range(num_experts):
+                expert_id = f"expert_{i+1}"
+                expert_model = self._create_model_instance()
+
+                for node_id, matrices in criteria_matrices_per_node.items():
+                    expert_model.set_comparison_matrix(node_id, matrices[i])
+
+                self.consistency_report[expert_id] = expert_model.check_consistency(required_indices=consistency_check)
+
+                expert_model.calculate_weights(method=self.recipe['weight_derivation_method'])
+
+                for parent_id in criteria_matrices_per_node.keys():
+                    if parent_id not in individual_weights_per_node: individual_weights_per_node[parent_id] = []
+
+                    w_dict = expert_model.get_child_weights(parent_id, weight_type='local')
+                    parent_node = expert_model._find_node(parent_id)
+                    w_vec = np.array([w_dict[child.id] for child in parent_node.children])
+                    individual_weights_per_node[parent_id].append(w_vec)
+
+            final_crisp_weights = {}
+            for node_id, weight_vectors in individual_weights_per_node.items():
+                matrix_of_weights = np.array(weight_vectors)
+
+                if expert_weights is None:
+                    avg_weights = np.mean(matrix_of_weights, axis=0)
+                else:
+                    avg_weights = np.average(matrix_of_weights, axis=0, weights=expert_weights)
+
+                avg_weights /= np.sum(avg_weights)
+                final_crisp_weights[node_id] = avg_weights
+
+            self._set_final_weights_on_model(final_crisp_weights)
+
+        self.model.root._set_model_reference(self.model)
 
         self.criteria_weights = self.model.get_criteria_weights()
         print("--- Weight fitting complete. ---")
@@ -530,7 +573,6 @@ class Workflow:
         print("--- Weight fitting complete. ---")
 
         return self
-
 
     def _fit_weights_aij(self, expert_matrices, expert_weights, consistency_check=["saaty_cr", "gci"]):
         """Fits weights using Aggregation of Individual Judgments."""
