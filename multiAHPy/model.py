@@ -967,7 +967,8 @@ class Hierarchy(Generic[Number]):
     def plot_sensitivity(self, parent_node_id: str, criterion_id: str, alt_name: str, figsize=(12, 7)):
         """Plots a sensitivity analysis for a given criterion and alternative."""
         from .visualization import plot_sensitivity_analysis
-        return plot_sensitivity_analysis(self, parent_node_id, criterion_id, alt_name, figsize)
+        plot_sensitivity_analysis(self, parent_node_id, criterion_id, alt_name, figsize)
+        return None
 
     def full_report(self, filename: str | None = None, **kwargs) -> str:
         """
