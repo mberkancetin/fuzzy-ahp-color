@@ -292,7 +292,7 @@ def display_tree_hierarchy(model: 'Hierarchy', filename: str | None = None, cons
         except ImportError:
             print("Could not display inline. Provide a `filename` to save as an HTML file.")
 
-def format_model_summary(model: 'Hierarchy', alternative_name: str) -> str:
+def format_model_summary(model: Hierarchy, alternative_name: str) -> str:
     """
     Generates a structured string summary of the entire evaluation model
     for a single alternative, similar to the presentation slide.
@@ -305,39 +305,53 @@ def format_model_summary(model: 'Hierarchy', alternative_name: str) -> str:
         A formatted string representing the model summary.
     """
     alt = next((a for a in model.alternatives if a.name == alternative_name), None)
-    if alt is None:
-        return f"Error: Alternative '{alternative_name}' not found in the model."
-    if alt.overall_score is None:
-        return f"Error: Scores for '{alternative_name}' have not been calculated yet."
+    if alt is None: return f"Error: Alternative '{alternative_name}' not found."
+    if alt.overall_score is None: return f"Error: Scores not calculated."
 
     lines = []
     header = f" HIERARCHICAL EVALUATION SUMMARY for: {alt.name} "
     lines.append("=" * len(header))
     lines.append(header)
     lines.append("=" * len(header))
-    lines.append(f"\nFINAL OVERALL SCORE: {alt.overall_score.defuzzify():.4f}\n")
+
+    final_score = alt.overall_score
+    final_val = final_score.defuzzify() if hasattr(final_score, 'defuzzify') else final_score
+    lines.append(f"\nFINAL OVERALL SCORE: {final_val:.4f}\n")
 
     for crit_node in model.root.children:
-        crit_weight = crit_node.local_weight.defuzzify()
-        crit_score = alt.node_scores[crit_node.id].defuzzify()
+        crit_weight = crit_node.local_weight.defuzzify() if crit_node.local_weight else 0.0
+        crit_g_weight = crit_node.global_weight.defuzzify() if crit_node.global_weight else 0.0
+
+        if crit_node.id in alt.node_scores:
+            c_score_obj = alt.node_scores[crit_node.id]
+            crit_score = c_score_obj.defuzzify() if hasattr(c_score_obj, 'defuzzify') else c_score_obj
+        else:
+            crit_score = 0.0
+
         crit_contribution = crit_weight * crit_score
 
-        lines.append(f"--- Criterion: {crit_node.id} ({crit_node.description}) ---")
-        lines.append(f"  - Global Weight: {crit_node.global_weight.defuzzify():.4f}")
-        lines.append(f"  - Aggregated Performance Score for this Criterion: {crit_score:.4f}")
-        lines.append(f"  - Contribution to Final Score: {crit_contribution:.4f}\n")
+        lines.append(f"--- Criterion: {crit_node.id} ({crit_node.description or ''}) ---")
+        lines.append(f"  - Global Weight: {crit_g_weight:.4f}")
+        lines.append(f"  - Aggregated Score: {crit_score:.4f}")
+        lines.append(f"  - Contribution: {crit_contribution:.4f}\n")
 
         if not crit_node.is_leaf:
             lines.append("    Sub-criteria Breakdown:")
             for sub_crit_node in crit_node.children:
-                sub_crit_local_weight = sub_crit_node.local_weight.defuzzify()
-                sub_crit_global_weight = sub_crit_node.global_weight.defuzzify()
-                perf_score = alt.performance_scores[sub_crit_node.id].defuzzify()
+                sc_loc = sub_crit_node.local_weight.defuzzify()
+                sc_glob = sub_crit_node.global_weight.defuzzify()
+
+                raw_perf = alt.performance_scores.get(sub_crit_node.id)
+                if raw_perf is None:
+                    perf_score = 0.0
+                elif hasattr(raw_perf, 'defuzzify'):
+                    perf_score = raw_perf.defuzzify()
+                else:
+                    perf_score = float(raw_perf) # It's already a float
 
                 lines.append(f"      - {sub_crit_node.id}:")
-                lines.append(f"          Local Weight (within {crit_node.id}): {sub_crit_local_weight:.3f}")
-                lines.append(f"          Global Weight: {sub_crit_global_weight:.4f}")
-                lines.append(f"          Performance Score: {perf_score:.4f}")
+                lines.append(f"          Local W: {sc_loc:.3f} | Global W: {sc_glob:.4f}")
+                lines.append(f"          Perf Score: {perf_score:.4f}")
         lines.append("-" * 40)
 
     return "\n".join(lines)
@@ -449,59 +463,56 @@ def plot_sensitivity_analysis(
     _check_plotting_availability()
 
     parent_node = model._find_node(parent_node_id)
-    if not parent_node:
-        raise ValueError(f"Parent node '{parent_node_id}' not found.")
+    if not parent_node: raise ValueError(f"Parent '{parent_node_id}' not found.")
 
     criterion_to_vary = model._find_node(criterion_to_vary_id)
-    if not criterion_to_vary or criterion_to_vary.parent != parent_node:
-        raise ValueError(f"'{criterion_to_vary_id}' is not a direct child of '{parent_node_id}'.")
+    if not criterion_to_vary: raise ValueError(f"Criterion '{criterion_to_vary_id}' not found.")
 
-    alt_to_track = next((a for a in model.alternatives if a.name == alternative_name), None)
-    if not alt_to_track:
-        raise ValueError(f"Alternative '{alternative_name}' not found.")
+    original_weights = {child.id: child.local_weight for child in parent_node.children}
+    original_alt_scores = {a.name: a.overall_score for a in model.alternatives}
 
-    # --- IMPORTANT: Store original state ---
-    # We need to save the local weights of all siblings to restore them later.
-    original_sibling_weights = {sib.id: sib.local_weight for sib in parent_node.children}
-
-    # Also get the original defuzzified weight for plotting
-    original_crisp_weight = criterion_to_vary.local_weight.defuzzify()
+    orig_w_obj = original_weights[criterion_to_vary_id]
+    original_crisp_weight = orig_w_obj.defuzzify() if hasattr(orig_w_obj, 'defuzzify') else orig_w_obj
 
     weight_range = np.linspace(0.01, 0.99, 50)
     final_scores = []
 
-    for new_weight in weight_range:
-        # Temporarily set the new weight for the criterion being varied
-        criterion_to_vary.local_weight = model.number_type.from_normalized(new_weight)
+    try:
+        for new_weight in weight_range:
+            criterion_to_vary.local_weight = model.number_type.from_normalized(new_weight)
 
-        # Redistribute the remaining weight among the OTHER siblings proportionally
-        siblings_to_adjust = [c for c in parent_node.children if c.id != criterion_to_vary_id]
-        current_siblings_weight_sum = sum(original_sibling_weights[s.id].defuzzify() for s in siblings_to_adjust)
-        remaining_weight = 1.0 - new_weight
+            siblings = [c for c in parent_node.children if c.id != criterion_to_vary_id]
+            orig_sib_sum = sum(original_weights[s.id].defuzzify() for s in siblings)
 
-        if current_siblings_weight_sum > 0:
-            for sibling in siblings_to_adjust:
-                proportion = original_sibling_weights[sibling.id].defuzzify() / current_siblings_weight_sum
-                sibling.local_weight = model.number_type.from_normalized(remaining_weight * proportion)
+            remaining_weight = 1.0 - new_weight
 
-        # Recalculate global weights and scores with the temporary weights
-        model.calculate_weights()
+            if orig_sib_sum > 1e-9:
+                for sib in siblings:
+                    orig_val = original_weights[sib.id].defuzzify()
+                    ratio = orig_val / orig_sib_sum
+                    new_sib_val = ratio * remaining_weight
+                    sib.local_weight = model.number_type.from_normalized(new_sib_val)
+            else:
+                for sib in siblings:
+                    sib.local_weight = model.number_type.from_normalized(remaining_weight / len(siblings))
+
+            model._recalculate_global_weights()
+            model.calculate_alternative_scores()
+
+            target_alt = next(a for a in model.alternatives if a.name == alternative_name)
+            s_val = target_alt.overall_score
+            val = s_val.defuzzify() if hasattr(s_val, 'defuzzify') else s_val
+            final_scores.append(val)
+
+    finally:
+        for child in parent_node.children:
+            child.local_weight = original_weights[child.id]
+
+        model._recalculate_global_weights()
         model.calculate_alternative_scores()
 
-        # Find the target alternative in the newly calculated results
-        target_alt_new = next(a for a in model.alternatives if a.name == alternative_name)
-        final_scores.append(target_alt_new.overall_score.defuzzify())
-
-    # --- RESTORE THE ORIGINAL WEIGHTS to avoid side effects ---
-    for child in parent_node.children:
-        child.local_weight = original_sibling_weights[child.id]
-    # Fully recalculate everything to restore the model to its original state
-    model.calculate_weights()
-    model.calculate_alternative_scores()
-
-    # --- Create the plot ---
     fig, ax = plt.subplots(figsize=figsize)
-    ax.plot(weight_range, final_scores, marker='.', linestyle='-', label=f"Score for {alternative_name}")
+    ax.plot(weight_range, final_scores, marker='.', label=f"Score for {alternative_name}")
     ax.axvline(x=original_crisp_weight, color='r', linestyle='--', label=f'Original Weight ({original_crisp_weight:.3f})')
 
     ax.set_xlabel(f"Local Weight of '{criterion_to_vary_id}'")
@@ -510,7 +521,6 @@ def plot_sensitivity_analysis(
     ax.legend()
     ax.grid(True, alpha=0.5)
 
-    fig.tight_layout()
     return fig
 
 
