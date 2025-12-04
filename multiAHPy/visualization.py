@@ -523,6 +523,131 @@ def plot_sensitivity_analysis(
 
     return fig
 
+def plot_ifn_sensitivity_analysis(
+    model: Hierarchy,
+    parent_node_id: str,
+    criterion_to_vary_id: str,
+    alternative_name: str,
+    figsize=(12, 7),
+    hesitation_levels: List[float | str] = ['original', 0.0]
+) -> 'plt.Figure':
+    """
+    Plots sensitivity analysis with support for Iso-Hesitant (Original)
+    and Fixed-Hesitant simulations.
+
+    Args:
+        hesitation_levels: List of hesitation values to simulate.
+                           Use 'original' to keep the experts' actual hesitation.
+                           Use floats (e.g. 0.0, 0.1) to simulate specific uncertainty levels.
+    """
+    if _check_plotting_availability(): raise ImportError("Matplotlib required.")
+
+    parent_node = model._find_node(parent_node_id)
+    criterion_to_vary = model._find_node(criterion_to_vary_id)
+    alt_to_track = next((a for a in model.alternatives if a.name == alternative_name), None)
+
+    if not all([parent_node, criterion_to_vary, alt_to_track]):
+        raise ValueError("Invalid Node or Alternative IDs provided.")
+
+    # 1. Capture Original State (Weights AND Hesitations)
+    # We store the *Object* to get the pi, and the *Defuzzified Value* for proportioning.
+    original_state = {}
+    for child in parent_node.children:
+        w_obj = child.local_weight
+        if hasattr(w_obj, 'pi'):
+            pi = w_obj.pi
+            score = w_obj.defuzzify(method='normalized_score')
+        else:
+            pi = 0.0
+            score = w_obj.defuzzify() if hasattr(w_obj, 'defuzzify') else float(w_obj)
+
+        original_state[child.id] = {'pi': pi, 'score': score, 'obj': w_obj}
+
+    # Original Crisp Weight of the target (for the vertical line)
+    target_orig_weight = original_state[criterion_to_vary_id]['score']
+
+    # 2. Setup Plot
+    fig, ax = plt.subplots(figsize=figsize)
+    colors = plt.cm.viridis(np.linspace(0, 0.9, len(hesitation_levels)))
+    weight_range = np.linspace(0.01, 0.99, 40)
+
+    # 3. Simulation Loop
+    for idx, hes_mode in enumerate(hesitation_levels):
+        scores_trace = []
+
+        label = f"Iso-Hesitant (Real)" if hes_mode == 'original' else f"Hesitation $\pi={hes_mode}$"
+        line_style = '-' if hes_mode == 'original' else '--'
+        width = 2.5 if hes_mode == 'original' else 1.5
+
+        try:
+            for new_weight_mag in weight_range:
+                # --- A. Set Target Criterion Weight ---
+                # Determine Pi to use
+                if hes_mode == 'original':
+                    target_pi = original_state[criterion_to_vary_id]['pi']
+                else:
+                    target_pi = float(hes_mode)
+
+                # Construct IFN with (Magnitude=new_weight, Hesitation=target_pi)
+                criterion_to_vary.local_weight = model.number_type.from_score_and_hesitation(
+                    new_weight_mag, target_pi
+                )
+
+                # --- B. Redistribute Sibling Weights ---
+                siblings = [c for c in parent_node.children if c.id != criterion_to_vary_id]
+                orig_sib_sum = sum(original_state[s.id]['score'] for s in siblings)
+                remaining_weight_mag = 1.0 - new_weight_mag
+
+                for sib in siblings:
+                    # 1. Determine new Magnitude (Score)
+                    if orig_sib_sum > 1e-9:
+                        ratio = original_state[sib.id]['score'] / orig_sib_sum
+                        new_sib_score = ratio * remaining_weight_mag
+                    else:
+                        new_sib_score = remaining_weight_mag / len(siblings)
+
+                    # 2. Determine Pi to use
+                    if hes_mode == 'original':
+                        sib_pi = original_state[sib.id]['pi']
+                    else:
+                        sib_pi = float(hes_mode)
+
+                    # 3. Construct IFN
+                    sib.local_weight = model.number_type.from_score_and_hesitation(
+                        new_sib_score, sib_pi
+                    )
+
+                # --- C. Calculate ---
+                model._recalculate_global_weights()
+                model.calculate_alternative_scores()
+
+                # --- D. Record ---
+                # Use normalized_score for display consistency
+                final_val = alt_to_track.overall_score.defuzzify(method='normalized_score')
+                scores_trace.append(final_val)
+
+            # Plot this trace
+            ax.plot(weight_range, scores_trace, label=label, linestyle=line_style, linewidth=width, color=colors[idx])
+
+        finally:
+            # Reset weights for next loop iteration
+            pass
+
+    # 4. Restore Original Model State
+    for child in parent_node.children:
+        child.local_weight = original_state[child.id]['obj']
+    model._recalculate_global_weights()
+    model.calculate_alternative_scores()
+
+    # 5. Finalize Plot
+    ax.axvline(x=target_orig_weight, color='r', linestyle=':', label=f'Current Weight ({target_orig_weight:.3f})')
+    ax.set_xlabel(f"Local Weight of '{criterion_to_vary_id}'")
+    ax.set_ylabel(f"Final Score for '{alternative_name}'")
+    ax.set_title(f"Hesitation-Aware Sensitivity Analysis: '{criterion_to_vary_id}'")
+    ax.legend(loc='best')
+    ax.grid(True, alpha=0.3)
+
+    return fig
 
 # ==============================================================================
 # 3. REPORTS

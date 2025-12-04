@@ -775,7 +775,45 @@ class IFN:
 
         return IFN(mu, nu)
 
+    @staticmethod
+    def from_score_and_hesitation(score: float, hesitation: float, alpha: float = 0.5) -> IFN:
+        """
+        Constructs an IFN from a target defuzzified score and a hesitation value.
+        This allows recreating a weight with the same 'magnitude' but specific 'uncertainty'.
 
+        Math based on Chen-Tan/Xu-Yager: Score = mu + alpha * pi
+        """
+        # 1. Clamp inputs
+        target_score = np.clip(score, 0.0, 1.0)
+        target_pi = np.clip(hesitation, 0.0, 0.999)
+
+        # 2. Derive Mu using S = mu + 0.5*pi  --> mu = S - 0.5*pi
+        mu = target_score - (alpha * target_pi)
+
+        # 3. Handle Boundary Conditions
+        # If score is very low (e.g. 0.05) and pi is high (e.g. 0.2), mu becomes negative.
+        # This means that specific combination is impossible (you can't have high hesitation and zero score).
+        # We must erode hesitation to fit the score.
+        if mu < 0:
+            # If mu < 0, set mu=0.
+            # Then Score = 0 + 0.5 * pi_new.  -> pi_new = Score / 0.5
+            mu = 0.0
+            target_pi = target_score / alpha
+
+        # Similarly for upper bound (score very high)
+        # nu = 1 - mu - pi. If nu < 0, we must adjust.
+        nu = 1.0 - mu - target_pi
+        if nu < 0:
+            nu = 0.0
+            # If nu=0, then mu = 1 - pi.
+            # Score = (1-pi) + 0.5*pi = 1 - 0.5*pi.
+            # pi_new = (1 - Score) / 0.5
+            target_pi = (1.0 - target_score) / alpha
+            mu = 1.0 - target_pi
+
+        # 4. Final Construction
+        return IFN(mu, nu)
+    
     @staticmethod
     def from_saaty(value: float) -> IFN:
         """
