@@ -69,7 +69,7 @@ class Crisp:
         This constructor is idempotent: Crisp(Crisp(5.0)) is valid.
         """
         if isinstance(value, Crisp):
-            self.value = value.valuez
+            self.value = value.value
         else:
             self.value = float(value)
 
@@ -813,7 +813,7 @@ class IFN:
 
         # 4. Final Construction
         return IFN(mu, nu)
-    
+
     @staticmethod
     def from_saaty(value: float) -> IFN:
         """
